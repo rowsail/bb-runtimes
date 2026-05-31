@@ -189,22 +189,52 @@ package body System.BB.CPU_Primitives is
    -- Enable_Interrupts --
    -----------------------
 
+   --  The native kernel tick and cross-core poke run at Xtensa interrupt
+   --  level 5 (CCOMPARE2 / CPU_INT 31; see s-bbbosu__esp32s3.adb).  That is
+   --  the highest level the Ada runtime uses, so it is the hardware level of
+   --  Interrupt_Priority'Last.  An Ada interrupt priority P thus maps to the
+   --  Xtensa INTLEVEL  Kernel_Tick_Level - (Interrupt_Priority'Last - P),
+   --  i.e. the top priority masks through level 5, each lower interrupt
+   --  priority masks one level less.  (Under ESP-IDF coexistence levels 1-4
+   --  are dispatched by ESP-IDF, so today level 5 is the only natively-owned
+   --  level and there is a single Ada Interrupt_Priority; this mapping is
+   --  written generally so it still holds once the full takeover frees the
+   --  lower levels.)
+   Kernel_Tick_Level : constant := 5;
+
    procedure Enable_Interrupts (Level : Integer) is
       Old : Integer;
+
+      --  INTLEVEL to install: 0 for ordinary task priorities (no interrupt
+      --  masked), otherwise the Xtensa level of the ceiling interrupt
+      --  priority (capped at the kernel tick level).
+      Intlevel : constant Integer :=
+        (if Level < Interrupt_Priority'First then 0
+         else Integer'Min
+                (Kernel_Tick_Level,
+                 Kernel_Tick_Level - (Interrupt_Priority'Last - Level)));
    begin
-      --  Simplified for bring-up: software priorities re-enable all
-      --  interrupts (INTLEVEL = 0); a request to stay at the highest
-      --  priority keeps them masked.  A full priority->INTLEVEL mapping for
-      --  hardware-interrupt priorities is future work (Board_Support).
-      if Level >= Interrupt_Priority'Last then
-         Asm ("rsil %0, 15",
-              Outputs  => Integer'Asm_Output ("=r", Old),
-              Volatile => True);
-      else
-         Asm ("rsil %0, 0",
-              Outputs  => Integer'Asm_Output ("=r", Old),
-              Volatile => True);
-      end if;
+      --  rsil takes an immediate, so dispatch on the computed level.
+      case Intlevel is
+         when 1 =>
+            Asm ("rsil %0, 1",
+                 Outputs => Integer'Asm_Output ("=r", Old), Volatile => True);
+         when 2 =>
+            Asm ("rsil %0, 2",
+                 Outputs => Integer'Asm_Output ("=r", Old), Volatile => True);
+         when 3 =>
+            Asm ("rsil %0, 3",
+                 Outputs => Integer'Asm_Output ("=r", Old), Volatile => True);
+         when 4 =>
+            Asm ("rsil %0, 4",
+                 Outputs => Integer'Asm_Output ("=r", Old), Volatile => True);
+         when 5 =>
+            Asm ("rsil %0, 5",
+                 Outputs => Integer'Asm_Output ("=r", Old), Volatile => True);
+         when others =>   --  level 0 (or below): enable all interrupts
+            Asm ("rsil %0, 0",
+                 Outputs => Integer'Asm_Output ("=r", Old), Volatile => True);
+      end case;
    end Enable_Interrupts;
 
    --------------------
