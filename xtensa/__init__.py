@@ -35,11 +35,10 @@ class Esp32s3(DFBBTarget):
         self.smp = smp
         super(Esp32s3, self).__init__()
         self.add_gnat_sources(
-            # Machine reset: no-libc spin loop for now (TODO: real ESP32-S3
-            # software reset via RTC_CNTL watchdog).
-            "src/s-macres__none.adb",
-            # Console: discard output until UART0 is wired up (TODO: real
-            # ESP32-S3 UART0 TX, or route through ESP-IDF).
+            # Machine reset via ESP-IDF esp_restart (does not export _exit/abort,
+            # so no clash with newlib).
+            "src/s-macres__esp32s3.adb",
+            # Console: discard output (the app logs via a C bridge).
             "src/s-textio__null.adb",
         )
         self.add_gnarl_sources(
