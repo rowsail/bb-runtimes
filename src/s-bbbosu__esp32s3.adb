@@ -228,6 +228,17 @@ package body System.BB.Board_Support is
 
    package body Multiprocessors is
 
+      procedure Initialize_Slave (CPU_Id : CPU)
+        with Import, Convention => C,
+             External_Name => "__gnat_initialize_slave";
+      --  GNARL slave entry (S.Task_Primitives.Operations.Initialize_Slave):
+      --  creates this CPU's idle thread, sets Running_Thread_Table, then runs
+      --  the idle loop (Power_Down) until a task is scheduled on this core.
+
+      procedure Native_Release_Core1
+        with Import, Convention => C, External_Name => "native_release_core1";
+      --  Release the parked ESP-IDF core-1 task so it calls Core1_Entry below.
+
       function Number_Of_CPUs return CPU is (CPU'Last);
 
       function Current_CPU return CPU is
@@ -246,12 +257,37 @@ package body System.BB.Board_Support is
       procedure Poke_CPU (CPU_Id : CPU) is
          pragma Unreferenced (CPU_Id);
       begin
-         null;  --  TODO Phase 5: inter-core interrupt (IPI).
+         null;  --  TODO Task 4: cross-core IPI (validated in hwtest/ipi).
       end Poke_CPU;
+
+      ----------------
+      -- Core1_Entry --
+      ----------------
+
+      procedure Core1_Entry
+        with Export, Convention => C,
+             External_Name => "__gnat_esp32s3_core1_entry";
+      --  Called on core 1 by the (now FreeRTOS-suspended) ESP-IDF core-1 task
+      --  once Start_All_CPUs has released it.  ESP-IDF already brought the CPU
+      --  up (VECBASE is shared with core 0, so our level-5 vector applies here
+      --  too), hence CPU_Primitives.Initialize_CPU is a no-op.  Entering the
+      --  GNARL slave never returns: it becomes this core's idle context.
+
+      procedure Core1_Entry is
+      begin
+         --  Keep interrupts masked through slave kernel initialisation; the
+         --  idle loop's Power_Down (waiti 0) re-enables them, at which point
+         --  the first tick/poke can drive a context switch.
+         CPU_Primitives.Disable_Interrupts;
+         Initialize_Slave (Current_CPU);
+      end Core1_Entry;
 
       procedure Start_All_CPUs is
       begin
-         null;  --  TODO Phase 5: release APP_CPU.
+         --  We cannot "launch" core 1 (ESP-IDF already booted it); instead the
+         --  ESP-IDF core-1 task parks itself with the FreeRTOS scheduler
+         --  suspended and waits for this release, then calls Core1_Entry.
+         Native_Release_Core1;
       end Start_All_CPUs;
 
    end Multiprocessors;
