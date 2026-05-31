@@ -77,6 +77,9 @@ from riscv import (
     RV64IMAFDC,
 )
 
+# xtensa
+from xtensa import Esp32s3
+
 # visium
 from visium import Visium
 
@@ -248,6 +251,9 @@ def build_configs(target):
     # Visium elf
     elif target == "mcm":
         t = Visium()
+    # Xtensa
+    elif target == "esp32s3":
+        t = Esp32s3(smp=True)
     # Risc-V
     elif target == "spike":
         t = Spike()

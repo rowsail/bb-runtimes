@@ -142,6 +142,9 @@ class RTSProfiles(object):
             elif cpu in ("riscv64",):
                 ret["CPU_Family"] = "riscv64"
                 ret["Has_FMA"] = "yes" if self.config.has_double_precision_fpu else "no"
+            elif cpu in ("xtensa",):
+                ret["CPU_Family"] = "xtensa"
+                ret["Has_FMA"] = "no"
             else:
                 print("Unexpected cpu %s" % cpu)
                 sys.exit(2)

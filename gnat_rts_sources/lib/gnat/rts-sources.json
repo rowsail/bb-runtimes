@@ -10,7 +10,8 @@
         "x86",
         "x86_64",
         "riscv32",
-        "riscv64"
+        "riscv64",
+        "xtensa"
       ],
       "Has_CHERI": [
         "no",
@@ -60,6 +61,11 @@
         ]
       },
       "CPU_Family:riscv64": {
+        "_srcs": [
+          "../../include/rts-sources/gnarl/spinlock-gcc"
+        ]
+      },
+      "CPU_Family:xtensa": {
         "_srcs": [
           "../../include/rts-sources/gnarl/spinlock-gcc"
         ]
@@ -321,7 +327,8 @@
         "x86",
         "x86_64",
         "riscv32",
-        "riscv64"
+        "riscv64",
+        "xtensa"
       ],
       "Certifiable_Packages": [
         "no",
@@ -871,6 +878,36 @@
         },
         "_srcs": [
           "../../include/rts-sources/atomics/64"
+        ]
+      },
+      "CPU_Family:xtensa": {
+        "Add_Math_Lib:hardfloat": {
+          "_srcs": [
+            "../../include/rts-sources/math/long_long_64bit"
+          ]
+        },
+        "Add_Math_Lib:hardfloat_dp": {
+          "_srcs": [
+            "../../include/rts-sources/math/long_long_64bit"
+          ]
+        },
+        "Add_Math_Lib:hardfloat_sp": {
+          "_srcs": [
+            "../../include/rts-sources/math/long_long_64bit"
+          ]
+        },
+        "Add_Math_Lib:softfloat": {
+          "_srcs": [
+            "../../include/rts-sources/math/long_long_64bit"
+          ]
+        },
+        "Certifiable_Packages:yes": {
+          "_srcs": [
+            "../../include/rts-sources/libgcc/other_archs"
+          ]
+        },
+        "_srcs": [
+          "../../include/rts-sources/atomics/32"
         ]
       },
       "CPU_Family:x86": {
