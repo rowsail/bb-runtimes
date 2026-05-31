@@ -17,8 +17,10 @@
 
 pragma Restrictions (No_Elaboration_Code);
 
-with System.Machine_Code;       use System.Machine_Code;
+with Interfaces;                  use Interfaces;
+with System.Machine_Code;         use System.Machine_Code;
 with System.BB.CPU_Primitives;
+with System.BB.CPU_Primitives.Multiprocessors;
 with System.BB.Threads.Queues;
 
 package body System.BB.Board_Support is
@@ -31,6 +33,26 @@ package body System.BB.Board_Support is
    --  interrupt entry/exit and the context switch are fully native (no
    --  ESP-IDF interrupt dispatch).  The vector saves the interrupted context,
    --  calls __gnat_timer_interrupt below, then restores + RFE.
+
+   Alarm_Interrupt_Bit : constant Unsigned_32 := 2 ** 16;  --  CCOMPARE2/int16
+   Poke_Interrupt_Bit  : constant Unsigned_32 := 2 ** 31;  --  CPU_INT 31 (L5)
+   --  The single level-5 vector serves both the timer (CCOMPARE2) and the
+   --  cross-core poke; Timer_Interrupt reads the INTERRUPT register to see
+   --  which fired.  The poke is a FROM_CPU matrix source routed to CPU_INT 31
+   --  on each core (set up in glue.c); CPU_INT 31 is level-triggered, so the
+   --  handler deasserts it by clearing the FROM_CPU source register.
+
+   type Reg32 is mod 2 ** 32 with Size => 32;
+
+   From_CPU_2 : Reg32 with Volatile, Import,
+     Address => System'To_Address (16#600C_0038#);
+   --  SYSTEM_CPU_INTR_FROM_CPU_2_REG: poke target core 0 (write 1; clear 0).
+   From_CPU_3 : Reg32 with Volatile, Import,
+     Address => System'To_Address (16#600C_003C#);
+   --  SYSTEM_CPU_INTR_FROM_CPU_3_REG: poke target core 1.
+
+   procedure Clear_Poke;
+   --  Deassert this core's pending FROM_CPU poke source.
 
    procedure Timer_Interrupt
      with Export, Convention => C, External_Name => "__gnat_timer_interrupt";
@@ -63,9 +85,36 @@ package body System.BB.Board_Support is
    -- Timer_Interrupt --
    --------------------
 
-   procedure Timer_Interrupt is
+   procedure Clear_Poke is
    begin
-      System.BB.Interrupts.Interrupt_Wrapper (Alarm_Interrupt_ID);
+      --  Clear only THIS core's source (clearing the other core's would drop a
+      --  poke it has not yet serviced).
+      if Multiprocessors.Current_CPU = CPU'First then
+         From_CPU_2 := 0;
+      else
+         From_CPU_3 := 0;
+      end if;
+   end Clear_Poke;
+
+   procedure Timer_Interrupt is
+      Pending : Unsigned_32;
+   begin
+      Asm ("rsr.interrupt %0",
+           Outputs  => Unsigned_32'Asm_Output ("=r", Pending),
+           Volatile => True);
+
+      --  Cross-core poke (CPU_INT 31): ack the source, then run the GNARL poke
+      --  handler (this CPU's expired timing events + alarm wakeups).
+      if (Pending and Poke_Interrupt_Bit) /= 0 then
+         Clear_Poke;
+         System.BB.CPU_Primitives.Multiprocessors.Poke_Handler;
+      end if;
+
+      --  Timer alarm (CCOMPARE2 / int 16): the attached Alarm_Handler re-arms
+      --  CCOMPARE2, which clears int 16.
+      if (Pending and Alarm_Interrupt_Bit) /= 0 then
+         System.BB.Interrupts.Interrupt_Wrapper (Alarm_Interrupt_ID);
+      end if;
 
       --  Interrupt epilogue: switch to the highest-priority ready thread if it
       --  differs from the one we interrupted.  Context_Switch saves the
@@ -239,6 +288,17 @@ package body System.BB.Board_Support is
         with Import, Convention => C, External_Name => "native_release_core1";
       --  Release the parked ESP-IDF core-1 task so it calls Core1_Entry below.
 
+      procedure Native_Setup_Poke_Core0
+        with Import, Convention => C,
+             External_Name => "native_setup_poke_core0";
+      --  Route FROM_CPU_INTR2 -> CPU_INT 31 on core 0 and enable it (core 0).
+
+      procedure Native_Setup_Poke_Core1
+        with Import, Convention => C,
+             External_Name => "native_setup_poke_core1";
+      --  Route FROM_CPU_INTR3 -> CPU_INT 31 on core 1 and enable int 31 + the
+      --  CCOMPARE2 timer (int 16) there (run on core 1).
+
       function Number_Of_CPUs return CPU is (CPU'Last);
 
       function Current_CPU return CPU is
@@ -255,9 +315,14 @@ package body System.BB.Board_Support is
       end Current_CPU;
 
       procedure Poke_CPU (CPU_Id : CPU) is
-         pragma Unreferenced (CPU_Id);
       begin
-         null;  --  TODO Task 4: cross-core IPI (validated in hwtest/ipi).
+         --  Assert the target core's FROM_CPU source (matrix-routed to its
+         --  CPU_INT 31, level 5 -> our xt_highint5 -> Poke_Handler).
+         if CPU_Id = CPU'First then
+            From_CPU_2 := 1;   --  core 0
+         else
+            From_CPU_3 := 1;   --  core 1
+         end if;
       end Poke_CPU;
 
       ----------------
@@ -279,14 +344,17 @@ package body System.BB.Board_Support is
          --  idle loop's Power_Down (waiti 0) re-enables them, at which point
          --  the first tick/poke can drive a context switch.
          CPU_Primitives.Disable_Interrupts;
+         Native_Setup_Poke_Core1;   --  enable poke (int 31) + timer (int 16)
          Initialize_Slave (Current_CPU);
       end Core1_Entry;
 
       procedure Start_All_CPUs is
       begin
+         --  Enable this (master) core's poke interrupt, then release core 1.
          --  We cannot "launch" core 1 (ESP-IDF already booted it); instead the
          --  ESP-IDF core-1 task parks itself with the FreeRTOS scheduler
          --  suspended and waits for this release, then calls Core1_Entry.
+         Native_Setup_Poke_Core0;
          Native_Release_Core1;
       end Start_All_CPUs;
 
