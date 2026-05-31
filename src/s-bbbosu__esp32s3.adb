@@ -230,8 +230,18 @@ package body System.BB.Board_Support is
 
       function Number_Of_CPUs return CPU is (CPU'Last);
 
-      function Current_CPU return CPU is (CPU'First);
-      --  TODO Phase 5: read PRID (0 = PRO_CPU, 1 = APP_CPU).
+      function Current_CPU return CPU is
+         Result : Integer;
+      begin
+         --  ESP32-S3: PRID bit 13 selects the core (0 = PRO_CPU/core 0,
+         --  1 = APP_CPU/core 1).  System.Multiprocessors.CPU is 1-based, so
+         --  the running CPU id is that bit plus one.
+         Asm ("rsr.prid %0"        & ASCII.LF & ASCII.HT &
+              "extui  %0, %0, 13, 1",
+              Outputs  => Integer'Asm_Output ("=r", Result),
+              Volatile => True);
+         return CPU (Result + 1);
+      end Current_CPU;
 
       procedure Poke_CPU (CPU_Id : CPU) is
          pragma Unreferenced (CPU_Id);
