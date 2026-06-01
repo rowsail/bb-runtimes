@@ -22,6 +22,8 @@
 	.set	CTX_SP, 0	/* a1: stack pointer at the switch point  */
 	.set	CTX_PS, 8	/* PS (processor state)                   */
 	.set	CTX_A0, 12	/* a0: return address (call-size encoded) */
+	.set	CTX_CP, 20	/* CP_State: ptr to the 72-byte FPU save  */
+				/* area (f0..f15, FCR@64, FSR@68)         */
 
 /* --------------------------------------------------------------------------
  * void __gnat_context_switch (Address running_slot, Address first_slot);
@@ -67,9 +69,62 @@ __gnat_context_switch:
 	rsr.ps	a5
 	s32i	a5, a4, CTX_PS		/* save PS                           */
 
+	/* Eagerly save the running thread's FPU (CP0) state into its CP_State
+	   area.  The kernel is FP-free, so the f-registers still hold this
+	   thread's state at the switch point.  CPENABLE bit 0 is set per core
+	   (Initialize_CPU), so these FP ld/st execute.  Skip if no save area. */
+	l32i	a8, a4, CTX_CP		/* a8 = running CP_State (FPU area)   */
+	beqz	a8, 1f
+	ssi	f0,  a8, 0
+	ssi	f1,  a8, 4
+	ssi	f2,  a8, 8
+	ssi	f3,  a8, 12
+	ssi	f4,  a8, 16
+	ssi	f5,  a8, 20
+	ssi	f6,  a8, 24
+	ssi	f7,  a8, 28
+	ssi	f8,  a8, 32
+	ssi	f9,  a8, 36
+	ssi	f10, a8, 40
+	ssi	f11, a8, 44
+	ssi	f12, a8, 48
+	ssi	f13, a8, 52
+	ssi	f14, a8, 56
+	ssi	f15, a8, 60
+	rur.fcr	a9
+	s32i	a9, a8, 64
+	rur.fsr	a9
+	s32i	a9, a8, 68
+1:
+
 	/* Make First the running thread and load its resume state. */
 	l32i	a7, a3, 0		/* a7 = next context buffer          */
 	s32i	a7, a2, 0		/* Running_Thread_Table (CPU) := next*/
+
+	/* Restore the incoming thread's FPU state from its CP_State area. */
+	l32i	a8, a7, CTX_CP		/* a8 = next CP_State (FPU area)      */
+	beqz	a8, 2f
+	lsi	f0,  a8, 0
+	lsi	f1,  a8, 4
+	lsi	f2,  a8, 8
+	lsi	f3,  a8, 12
+	lsi	f4,  a8, 16
+	lsi	f5,  a8, 20
+	lsi	f6,  a8, 24
+	lsi	f7,  a8, 28
+	lsi	f8,  a8, 32
+	lsi	f9,  a8, 36
+	lsi	f10, a8, 40
+	lsi	f11, a8, 44
+	lsi	f12, a8, 48
+	lsi	f13, a8, 52
+	lsi	f14, a8, 56
+	lsi	f15, a8, 60
+	l32i	a9, a8, 64
+	wur.fcr	a9
+	l32i	a9, a8, 68
+	wur.fsr	a9
+2:
 
 	l32i	a1, a7, CTX_SP		/* SP                                */
 	l32i	a0, a7, CTX_A0		/* return address (call-size encoded)*/

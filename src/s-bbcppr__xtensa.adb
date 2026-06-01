@@ -116,9 +116,20 @@ package body System.BB.CPU_Primitives is
 
       Align : constant Integer_Address := CPU_Specific.Stack_Alignment;
 
-      Top : constant Integer_Address :=
+      CP_Size : constant Integer_Address := 80;
+      --  Per-thread FPU (CP0) save area: 72 bytes (f0..f15, FCR, FSR) rounded
+      --  up to the 16-byte stack alignment.  Reserved at the very top of the
+      --  task stack; the switch SP starts below it.
+
+      Stack_Top : constant Integer_Address :=
               (To_Integer (Stack_Pointer) / Align) * Align;
-      --  16-byte aligned top of the task stack, used as the switch SP.
+
+      CP_Area : constant Integer_Address := Stack_Top - CP_Size;
+      --  16-byte aligned FPU save area, [CP_Area .. Stack_Top).
+
+      Top : constant Integer_Address := CP_Area;
+      --  16-byte aligned top of the usable task stack (below the FPU area),
+      --  used as the switch SP.
 
       Task_SP : constant Integer_Address := Top - 32;
       --  The trampoline window's own stack pointer (below the save area).
@@ -135,10 +146,18 @@ package body System.BB.CPU_Primitives is
       A3_Slot : System.Address;                  --  -> a3 = argument
       for A3_Slot'Address use To_Address (Top - 4);
 
+      FP_Area : Storage_Array (1 .. Storage_Offset (CP_Size))
+        with Address => To_Address (CP_Area);
+      --  Zero-initialise the FPU save area (f-registers 0.0, FCR/FSR default).
+
    begin
-      --  The environment task already has a stack and context: nothing to do.
+      FP_Area := (others => 0);
+
+      --  The environment/idle tasks (Program_Counter = Null_Address) keep
+      --  their live context; only record their FPU save area.
 
       if Program_Counter = Null_Address then
+         Buffer.CP_State := To_Address (CP_Area);
          return;
       end if;
 
@@ -157,7 +176,7 @@ package body System.BB.CPU_Primitives is
          PS        => To_Address (Initial_PS),
          A0        => Start_Thread_Asm'Address,
          THREADPTR => Null_Address,
-         CP_State  => Null_Address);
+         CP_State  => To_Address (CP_Area));
    end Initialize_Context;
 
    ---------------------------
@@ -243,10 +262,15 @@ package body System.BB.CPU_Primitives is
 
    procedure Initialize_CPU is
    begin
-      --  TODO Phase 3: per-CPU bring-up after ESP-IDF hands the core over
-      --  (PS, CPENABLE=0, vector base / VECBASE, interrupt matrix routing).
-      --  Runs on each of the two ESP32-S3 cores under SMP.
-      null;
+      --  Enable coprocessor 0 (the single-precision FPU) on this core so the
+      --  eager FPU save/restore in __gnat_context_switch can run and tasks can
+      --  use hardware floating point.  Runs on each of the two ESP32-S3 cores
+      --  (core 0 via System.BB.Threads.Initialize, core 1 via Core1_Entry).
+      Asm ("movi  a3, 1"        & ASCII.LF & ASCII.HT &
+           "wsr.cpenable a3"    & ASCII.LF & ASCII.HT &
+           "rsync",
+           Clobber  => "a3",
+           Volatile => True);
    end Initialize_CPU;
 
 end System.BB.CPU_Primitives;

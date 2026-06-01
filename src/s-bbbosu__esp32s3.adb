@@ -415,6 +415,7 @@ package body System.BB.Board_Support is
          --  idle loop's Power_Down (waiti 0) re-enables them, at which point
          --  the first tick/poke can drive a context switch.
          CPU_Primitives.Disable_Interrupts;
+         CPU_Primitives.Initialize_CPU;   --  enable the FPU on core 1
          Native_Setup_Poke_Core1;   --  enable poke (int 31) + timer (int 16)
          Initialize_Slave (Current_CPU);
       end Core1_Entry;
