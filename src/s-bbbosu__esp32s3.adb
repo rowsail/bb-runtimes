@@ -229,9 +229,20 @@ package body System.BB.Board_Support is
         (Interrupt : System.BB.Interrupts.Interrupt_ID)
          return System.Any_Priority
       is
-         pragma Unreferenced (Interrupt);
+         --  Map each ESP32-S3 CPU interrupt's fixed Xtensa level to its Ada
+         --  interrupt priority, so Interrupt_Wrapper raises to that level.
+         --  Interrupt_Priority'Last = level 5 (kernel tick); each lower level
+         --  is one priority less (the inverse of the Enable_Interrupts map).
+         Level : Natural;
       begin
-         return Interrupt_Priority'First;
+         case Interrupt is
+            when 16 | 26 | 31      => Level := 5;  --  CCOMPARE2, poke (L5)
+            when 24 | 25 | 28 | 30 => Level := 4;
+            when 22 | 23 | 27 | 29 => Level := 3;  --  29 = SW int (L3)
+            when 19 | 20 | 21      => Level := 2;
+            when others            => Level := 5;  --  unknown: top (safe)
+         end case;
+         return Interrupt_Priority'Last - (5 - Level);
       end Priority_Of_Interrupt;
 
       -------------------------------

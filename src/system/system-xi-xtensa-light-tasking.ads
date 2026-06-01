@@ -113,7 +113,12 @@ package System is
 
    --  Priority-related Declarations (RM D.1)
 
-   Nbr_Interrupt_Priority : constant Positive := 1;
+   --  Five interrupt priorities map to Xtensa interrupt levels 1 .. 5:
+   --  Interrupt_Priority'Last = level 5 (kernel tick/poke); lower interrupt
+   --  priorities = levels 4 .. 1 for native device interrupts on dedicated
+   --  medium-level vectors.  See Enable_Interrupts (s-bbcppr__xtensa.adb) and
+   --  Priority_Of_Interrupt (s-bbbosu__esp32s3.adb).
+   Nbr_Interrupt_Priority : constant Positive := 5;
 
    Max_Interrupt_Priority : constant Positive := 255;
    Min_Interrupt_Priority : constant Positive :=
