@@ -34,8 +34,9 @@ package body System.BB.Board_Support is
    --  ESP-IDF interrupt dispatch).  The vector saves the interrupted context,
    --  calls __gnat_timer_interrupt below, then restores + RFE.
 
-   Alarm_Interrupt_Bit : constant Unsigned_32 := 2 ** 16;  --  CCOMPARE2/int16
-   Poke_Interrupt_Bit  : constant Unsigned_32 := 2 ** 31;  --  CPU_INT 31 (L5)
+   Alarm_Interrupt_Bit  : constant Unsigned_32 := 2 ** 16;  --  CCOMPARE2/int16
+   Poke_Interrupt_Bit   : constant Unsigned_32 := 2 ** 31;  --  CPU_INT 31 (L5)
+   Device_Interrupt_Bit : constant Unsigned_32 := 2 ** 29;  --  CPU_INT 29 (L3)
    --  The single level-5 vector serves both the timer (CCOMPARE2) and the
    --  cross-core poke; Timer_Interrupt reads the INTERRUPT register to see
    --  which fired.  The poke is a FROM_CPU matrix source routed to CPU_INT 31
@@ -62,6 +63,16 @@ package body System.BB.Board_Support is
    procedure Native_Enable_Tick
      with Import, Convention => C, External_Name => "native_enable_tick";
    --  Enables int 16 (esp_cpu_intr_enable) once the handler is attached.
+
+   procedure Native_Enable_Cpu_Int (N : Integer)
+     with Import, Convention => C, External_Name => "native_enable_cpu_int";
+   --  esp_cpu_intr_enable (1 << N) on the current core.
+
+   procedure Level3_Dispatch
+     with Export, Convention => C, External_Name => "__gnat_level3_dispatch";
+   --  Called from the native level-3 vector: ack the device source, run its
+   --  GNARL handler (Interrupt_Wrapper), then the interrupt-epilogue context
+   --  switch -- the same shape as Timer_Interrupt but for level 3.
 
    procedure Park_Alarm;
    --  Push CCOMPARE2 ~a full period ahead so int 16 cannot fire spuriously
@@ -125,6 +136,31 @@ package body System.BB.Board_Support is
          System.BB.CPU_Primitives.Context_Switch;
       end if;
    end Timer_Interrupt;
+
+   ---------------------
+   -- Level3_Dispatch --
+   ---------------------
+
+   procedure Level3_Dispatch is
+      Pending : Unsigned_32;
+   begin
+      Asm ("rsr.interrupt %0",
+           Outputs  => Unsigned_32'Asm_Output ("=r", Pending),
+           Volatile => True);
+
+      if (Pending and Device_Interrupt_Bit) /= 0 then
+         --  Ack the source (CPU_INT 29 is the level-3 software interrupt; a
+         --  real device would instead be cleared by its handler).
+         Asm ("wsr.intclear %0" & ASCII.LF & ASCII.HT & "rsync",
+              Inputs   => Unsigned_32'Asm_Input ("r", Device_Interrupt_Bit),
+              Volatile => True);
+         System.BB.Interrupts.Interrupt_Wrapper (29);
+      end if;
+
+      if System.BB.Threads.Queues.Context_Switch_Needed then
+         System.BB.CPU_Primitives.Context_Switch;
+      end if;
+   end Level3_Dispatch;
 
    ----------------------
    -- Initialize_Board --
@@ -253,9 +289,12 @@ package body System.BB.Board_Support is
         (Interrupt : System.BB.Interrupts.Interrupt_ID;
          Prio      : Interrupt_Priority)
       is
-         pragma Unreferenced (Interrupt, Prio);
+         pragma Unreferenced (Prio);
       begin
-         null;  --  ESP-IDF already routes the interrupt; nothing extra here.
+         --  Enable the CPU interrupt on this core.  Its dedicated vector (the
+         --  level of CPU_INT Interrupt) routes to our native dispatch; matrix
+         --  routing for a real device source is done by the caller / glue.
+         Native_Enable_Cpu_Int (Integer (Interrupt));
       end Install_Interrupt_Handler;
 
       --------------------------
