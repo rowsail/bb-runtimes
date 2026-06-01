@@ -45,6 +45,8 @@ class Esp32s3(DFBBTarget):
             "src/s-bbpara__esp32s3.ads",
             # Board_Support body against the common timer32 spec (SKELETON)
             "src/s-bbbosu__esp32s3.adb",
+            # Ada.Interrupts.Names: named CPU interrupts for pragma Attach_Handler
+            "src/a-intnam__esp32s3.ads",
         )
 
     @property
