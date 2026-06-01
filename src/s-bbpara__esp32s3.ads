@@ -18,15 +18,16 @@ package System.BB.Parameters is
    -- Hardware clock --
    --------------------
 
-   Clock_Frequency : constant := 160_000_000;
-   --  Hertz.  ESP-IDF's default ESP32-S3 CPU clock is 160 MHz (confirmed on
-   --  hardware via the CCOUNT/CCOMPARE tick rate).  CCOUNT advances at the
-   --  core clock, so this is also Ticks_Per_Second.
+   Clock_Frequency : constant := 240_000_000;
+   --  Hertz.  The ESP32-S3 runs the CPU at up to 240 MHz; we target that (the
+   --  max) as the default.  CCOUNT advances at the core clock, so this is also
+   --  Ticks_Per_Second, AND it must equal the configured hardware clock --
+   --  the application pins CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ to match, and
+   --  Initialize_Board (s-bbbosu__esp32s3.adb) fails loudly on any mismatch.
 
    Ticks_Per_Second : constant := Clock_Frequency;
    --  The System.BB.Time alarm is driven by the Xtensa CCOUNT/CCOMPARE
    --  registers, which advance at the core clock rate.
-   --  TODO: track the actually-configured CPU clock.
 
    ----------------
    -- Interrupts --

@@ -19,6 +19,7 @@ pragma Restrictions (No_Elaboration_Code);
 
 with Interfaces;                  use Interfaces;
 with System.Machine_Code;         use System.Machine_Code;
+with System.BB.Parameters;
 with System.BB.CPU_Primitives;
 with System.BB.CPU_Primitives.Multiprocessors;
 with System.BB.Threads.Queues;
@@ -67,6 +68,15 @@ package body System.BB.Board_Support is
    procedure Native_Enable_Cpu_Int (N : Integer)
      with Import, Convention => C, External_Name => "native_enable_cpu_int";
    --  esp_cpu_intr_enable (1 << N) on the current core.
+
+   function Native_CPU_Freq_Hz return Unsigned_32
+     with Import, Convention => C, External_Name => "native_cpu_freq_hz";
+   --  Actual configured CPU clock (esp_clk_cpu_freq).
+
+   procedure Native_Freq_Panic (Expected, Actual : Unsigned_32)
+     with Import, Convention => C, External_Name => "native_freq_panic",
+          No_Return;
+   --  Loudly report a Clock_Frequency / hardware-clock mismatch and halt.
 
    procedure Level3_Dispatch
      with Export, Convention => C, External_Name => "__gnat_level3_dispatch";
@@ -167,7 +177,18 @@ package body System.BB.Board_Support is
    ----------------------
 
    procedure Initialize_Board is
+      --  Read_Clock is CCOUNT and Ticks_Per_Second = Clock_Frequency, so the
+      --  constant must match the actual CPU clock or all Ada.Real_Time timing
+      --  is silently scaled.  The frequency is necessarily compile-time
+      --  (Ada.Real_Time bakes Time_Unit = 1 / Ticks_Per_Second), so we cannot
+      --  adapt -- instead fail loudly if the hardware disagrees.
+      Expected : constant Unsigned_32 :=
+        Unsigned_32 (System.BB.Parameters.Clock_Frequency);
+      Actual   : constant Unsigned_32 := Native_CPU_Freq_Hz;
    begin
+      if Actual /= Expected then
+         Native_Freq_Panic (Expected, Actual);
+      end if;
       Park_Alarm;             --  no spurious int 16 before a real alarm
    end Initialize_Board;
 
