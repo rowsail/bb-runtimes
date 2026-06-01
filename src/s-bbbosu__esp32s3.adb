@@ -37,7 +37,8 @@ package body System.BB.Board_Support is
 
    Alarm_Interrupt_Bit  : constant Unsigned_32 := 2 ** 16;  --  CCOMPARE2/int16
    Poke_Interrupt_Bit   : constant Unsigned_32 := 2 ** 31;  --  CPU_INT 31 (L5)
-   Device_Interrupt_Bit : constant Unsigned_32 := 2 ** 29;  --  CPU_INT 29 (L3)
+   Device_Interrupt_Id  : constant := 23;                   --  CPU_INT 23 (L3)
+   Device_Interrupt_Bit : constant Unsigned_32 := 2 ** Device_Interrupt_Id;
    --  The single level-5 vector serves both the timer (CCOMPARE2) and the
    --  cross-core poke; Timer_Interrupt reads the INTERRUPT register to see
    --  which fired.  The poke is a FROM_CPU matrix source routed to CPU_INT 31
@@ -159,12 +160,11 @@ package body System.BB.Board_Support is
            Volatile => True);
 
       if (Pending and Device_Interrupt_Bit) /= 0 then
-         --  Ack the source (CPU_INT 29 is the level-3 software interrupt; a
-         --  real device would instead be cleared by its handler).
-         Asm ("wsr.intclear %0" & ASCII.LF & ASCII.HT & "rsync",
-              Inputs   => Unsigned_32'Asm_Input ("r", Device_Interrupt_Bit),
-              Volatile => True);
-         System.BB.Interrupts.Interrupt_Wrapper (29);
+         --  Run the attached handler; it clears the device source (CPU_INT 23
+         --  is level-triggered, so clearing the source deasserts it).  The
+         --  handler runs at level-3 priority, so int 23 stays masked until it
+         --  returns -- no storm despite the still-asserted source.
+         System.BB.Interrupts.Interrupt_Wrapper (Device_Interrupt_Id);
       end if;
 
       if System.BB.Threads.Queues.Context_Switch_Needed then
