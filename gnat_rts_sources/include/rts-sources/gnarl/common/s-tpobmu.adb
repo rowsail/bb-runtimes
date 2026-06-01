@@ -130,6 +130,7 @@ package body System.Tasking.Protected_Objects.Multiprocessors is
       CPU_Id     : constant CPU :=
                       BB.Board_Support.Multiprocessors.Current_CPU;
       Entry_Call : Entry_Call_Link;
+      Next       : Entry_Call_Link;
 
    begin
       --  Interrupts are always disabled when entering here
@@ -141,9 +142,24 @@ package body System.Tasking.Protected_Objects.Multiprocessors is
 
       Unlock (Served_Entry_Call (CPU_Id).Lock);
 
+      --  Wake up every drained caller.  Capture each node's successor and
+      --  unlink the node (Next := null) *before* calling Wakeup.  Wakeup
+      --  re-enters the kernel (Threads.Wakeup -> Leave_Kernel -> this very
+      --  callback) and may context-switch to the woken task; while it runs
+      --  the serving CPU can re-add this same call object to the (now empty)
+      --  served list, rewriting its Next field.  Were we to read Next *after*
+      --  Wakeup, that re-add would redirect the walk back into the list and
+      --  turn it into a cycle this loop follows unboundedly (observed: a
+      --  single served entry spinning Wakeup_Served_Entry hundreds of
+      --  thousands of times, preventing the caller from ever blocking).
+      --  Reading Next first and unlinking keeps each drained node
+      --  self-contained, so the per-CPU served list cannot become a cycle.
+
       while Entry_Call /= null loop
+         Next := Entry_Call.Next;
+         Entry_Call.Next := null;
          STPO.Wakeup (Entry_Call.Self, Entry_Caller_Sleep);
-         Entry_Call := Entry_Call.Next;
+         Entry_Call := Next;
       end loop;
    end Wakeup_Served_Entry;
 
