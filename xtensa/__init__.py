@@ -38,8 +38,8 @@ class Esp32s3(DFBBTarget):
             # Machine reset via ESP-IDF esp_restart (does not export _exit/abort,
             # so no clash with newlib).
             "src/s-macres__esp32s3.adb",
-            # Console: discard output (the app logs via a C bridge).
-            "src/s-textio__null.adb",
+            # Console: Ada.Text_IO -> built-in USB-serial-JTAG (devkit /dev/ttyACM).
+            "src/s-textio__esp32s3.adb",
         )
         self.add_gnarl_sources(
             "src/s-bbpara__esp32s3.ads",
