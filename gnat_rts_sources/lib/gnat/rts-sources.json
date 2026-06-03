@@ -1131,6 +1131,17 @@
             "../../include/rts-sources/full/zcx-dw2"
           ]
         },
+        "CPU_Family:xtensa": {
+          "Compiler_Backend:gcc": {
+            "_srcs": [
+              "../../include/rts-sources/full/zcx-dw2-gcc"
+            ]
+          },
+          "_srcs": [
+            "../../include/rts-sources/full/zcx-xtensa",
+            "../../include/rts-sources/full/zcx-dw2"
+          ]
+        },
         "CPU_Family:x86": {
           "Compiler_Backend:gcc": {
             "_srcs": [

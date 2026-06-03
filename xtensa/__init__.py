@@ -70,9 +70,12 @@ class Esp32s3(DFBBTarget):
     @property
     def system_ads(self):
         # Dual-core SMP: the Light (no-tasking) profile is dropped, as for
-        # Leon3 SMP.  Jorvik tasking is the light-tasking runtime.
+        # Leon3 SMP.  Both Jorvik tasking runtimes are offered:
+        #   light-tasking : No_Exception_Propagation + No_Finalization (small)
+        #   embedded      : full exception propagation + finalization (ZCX)
         return {
             "light-tasking": "system-xi-xtensa-light-tasking.ads",
+            "embedded": "system-xi-xtensa-embedded.ads",
         }
 
     @property
