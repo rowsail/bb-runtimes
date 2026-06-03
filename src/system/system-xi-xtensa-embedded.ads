@@ -34,10 +34,10 @@
 --                                                                          --
 ------------------------------------------------------------------------------
 
-pragma Restrictions (No_Exception_Registration);
---  Disable exception name registration. This capability is not used because
---  it is only required by exception stream attributes which are not supported
---  in this run time.
+--  No_Exception_Registration is intentionally NOT set in this (embedded)
+--  profile: System.Exception_Table is present, so name registration works and
+--  Ada.Exceptions.Exception_Name / Exception_Message return real strings.
+--  (light-tasking keeps the restriction for size.)
 
 pragma Profile (Jorvik);
 --  Bare-metal embedded tasking runtime (full exceptions + finalization)
