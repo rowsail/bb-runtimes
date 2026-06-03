@@ -40,7 +40,16 @@
 --  (light-tasking keeps the restriction for size.)
 
 pragma Profile (Jorvik);
---  Bare-metal embedded tasking runtime (full exceptions + finalization)
+--  Bare-metal embedded tasking runtime (full exceptions + finalization).
+--  NB: the ESP32-S3 stack (DRAM) is not executable, so GCC nested-subprogram
+--  trampolines -- which GNAT emits on the stack for the dispatch tables of
+--  tagged/controlled types declared LOCALLY in a subprogram -- fault when
+--  called.  -fno-trampolines does not help (Xtensa has no function
+--  descriptors).  Declare such types at library level (static DTs in flash);
+--  app code can add `pragma Restrictions (No_Implicit_Dynamic_Code)` to have
+--  the compiler reject the local case instead of crashing at run time.  The
+--  restriction is NOT set here because the full library (e.g. a-stbuun) emits
+--  an unused trampoline of its own.
 
 package System is
    pragma Pure;
