@@ -176,7 +176,13 @@ package body System.BB.CPU_Primitives is
          PS        => To_Address (Initial_PS),
          A0        => Start_Thread_Asm'Address,
          THREADPTR => Null_Address,
-         CP_State  => To_Address (CP_Area));
+         CP_State  => To_Address (CP_Area),
+         --  A new thread starts with no active hardware loop and SAR = 0;
+         --  LCOUNT = 0 is the critical one (see s-bbcpsp / context_switch.S).
+         SAR       => Null_Address,
+         LBEG      => Null_Address,
+         LEND      => Null_Address,
+         LCOUNT    => Null_Address);
    end Initialize_Context;
 
    ---------------------------

@@ -24,6 +24,10 @@
 	.set	CTX_A0, 12	/* a0: return address (call-size encoded) */
 	.set	CTX_CP, 20	/* CP_State: ptr to the 72-byte FPU save  */
 				/* area (f0..f15, FCR@64, FSR@68)         */
+	.set	CTX_SAR,    24	/* SAR (shift amount register)            */
+	.set	CTX_LBEG,   28	/* LBEG  \                                */
+	.set	CTX_LEND,   32	/* LEND   > Xtensa zero-overhead LOOP regs*/
+	.set	CTX_LCOUNT, 36	/* LCOUNT/  -- MUST be context-switched   */
 
 /* --------------------------------------------------------------------------
  * void __gnat_context_switch (Address running_slot, Address first_slot);
@@ -68,6 +72,20 @@ __gnat_context_switch:
 	s32i	a0, a4, CTX_A0		/* save return address (encodes size)*/
 	rsr.ps	a5
 	s32i	a5, a4, CTX_PS		/* save PS                           */
+
+	/* Save SAR + the zero-overhead LOOP registers (LBEG/LEND/LCOUNT).  A
+	   thread preempted mid-LOOP carries LCOUNT/=0; without this the resumed
+	   thread inherits a stale LEND and the hardware spuriously loops back to
+	   a stale LBEG -> wild control flow / InstructionFetchError.  a4 = the
+	   running context buffer, a5 scratch. */
+	rsr.sar	a5
+	s32i	a5, a4, CTX_SAR
+	rsr	a5, LBEG
+	s32i	a5, a4, CTX_LBEG
+	rsr	a5, LEND
+	s32i	a5, a4, CTX_LEND
+	rsr	a5, LCOUNT
+	s32i	a5, a4, CTX_LCOUNT
 
 	/* Eagerly save the running thread's FPU (CP0) state into its CP_State
 	   area.  The kernel is FP-free, so the f-registers still hold this
@@ -128,6 +146,20 @@ __gnat_context_switch:
 
 	l32i	a1, a7, CTX_SP		/* SP                                */
 	l32i	a0, a7, CTX_A0		/* return address (call-size encoded)*/
+
+	/* Restore SAR + the LOOP registers for the incoming thread (a7 = next
+	   context buffer, a5 scratch).  A brand-new thread has these zeroed by
+	   Initialize_Context, so it starts with no active loop.  The rsync below
+	   serialises these special-register writes before 'retw'. */
+	l32i	a5, a7, CTX_SAR
+	wsr.sar	a5
+	l32i	a5, a7, CTX_LBEG
+	wsr	a5, LBEG
+	l32i	a5, a7, CTX_LEND
+	wsr	a5, LEND
+	l32i	a5, a7, CTX_LCOUNT
+	wsr	a5, LCOUNT
+
 	l32i	a5, a7, CTX_PS		/* PS                                */
 	wsr.ps	a5
 	rsync

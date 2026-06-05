@@ -57,6 +57,17 @@ package System.BB.CPU_Specific is
       --  Pointer to this task's lazily-saved coprocessor / FPU save area.
       --  Coprocessor state is NOT saved eagerly here; it is saved on first
       --  use via CPENABLE trapping (ESP32-S3 has a single-precision FPU).
+
+      SAR       : System.Address;
+      --  SAR (shift amount register) -- volatile across a preemptive switch.
+
+      LBEG      : System.Address;
+      LEND      : System.Address;
+      LCOUNT    : System.Address;
+      --  Xtensa zero-overhead LOOP registers.  MUST be saved/restored across
+      --  a context switch (see context_switch.S): a thread preempted mid-LOOP
+      --  has LCOUNT /= 0, so resuming a thread with a stale LEND makes the
+      --  hardware spuriously loop -> wild control flow.
    end record;
 
    Stack_Alignment : constant := 16;
