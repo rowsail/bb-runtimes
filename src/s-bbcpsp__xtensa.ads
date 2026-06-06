@@ -68,6 +68,12 @@ package System.BB.CPU_Specific is
       --  a context switch (see context_switch.S): a thread preempted mid-LOOP
       --  has LCOUNT /= 0, so resuming a thread with a stale LEND makes the
       --  hardware spuriously loop -> wild control flow.
+
+      Frame_Kind : System.Address;
+      --  How this thread's saved state is encoded (context_switch.S Option A
+      --  dual-format dispatch): 0 = SOLICITED (cooperative yield; resume via
+      --  'retw'); 1 = INTERRUPT (preempted; full state in an XT_STK frame at
+      --  SP, resume via _xt_context_restore + 'rfe').
    end record;
 
    Stack_Alignment : constant := 16;

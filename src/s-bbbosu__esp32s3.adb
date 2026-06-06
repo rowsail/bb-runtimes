@@ -54,6 +54,22 @@ package body System.BB.Board_Support is
      Address => System'To_Address (16#600C_003C#);
    --  SYSTEM_CPU_INTR_FROM_CPU_3_REG: poke target core 1.
 
+   --  Preemptive context-switch deferral (Option A; see s-bbcppr +
+   --  context_switch.S __gnat_preempt_dispatch).  A switch requested inside a
+   --  native interrupt is deferred (Context_Switch sets Switch_Pending); the
+   --  vector epilogue dispatches it with no second window spill.
+
+   type Core_Word_Array is array (0 .. 1) of Unsigned_32;
+   pragma Volatile_Components (Core_Word_Array);
+
+   In_Native_Int : Core_Word_Array := (0, 0);
+   pragma Export (Asm, In_Native_Int, "__gnat_in_native_int");
+   --  Per-core native-interrupt nesting depth.
+
+   Switch_Pending : Core_Word_Array := (0, 0);
+   pragma Export (Asm, Switch_Pending, "__gnat_switch_pending");
+   --  Per-core "a context switch was deferred" flag, consumed by the vector.
+
    procedure Clear_Poke;
    --  Deassert this core's pending FROM_CPU poke source.
 
@@ -120,7 +136,13 @@ package body System.BB.Board_Support is
 
    procedure Timer_Interrupt is
       Pending : Unsigned_32;
+      Core    : constant Integer := Integer (Multiprocessors.Current_CPU) - 1;
    begin
+      --  Servicing a native interrupt: defer any context switch requested
+      --  below to the vector epilogue.  Runs at INTLEVEL 5 (masked), so this
+      --  update is not preemptible on this core.
+      In_Native_Int (Core) := In_Native_Int (Core) + 1;
+
       Asm ("rsr.interrupt %0",
            Outputs  => Unsigned_32'Asm_Output ("=r", Pending),
            Volatile => True);
@@ -143,9 +165,13 @@ package body System.BB.Board_Support is
       --  interrupted thread "solicited" (returning here); the level-5 vector
       --  performs the final register restore + RFE when it is resumed.
 
+      --  Context_Switch defers while In_Native_Int /= 0 (sets Switch_Pending);
+      --  the vector epilogue performs the real dispatch.
       if System.BB.Threads.Queues.Context_Switch_Needed then
          System.BB.CPU_Primitives.Context_Switch;
       end if;
+
+      In_Native_Int (Core) := In_Native_Int (Core) - 1;
    end Timer_Interrupt;
 
    ---------------------
@@ -154,7 +180,13 @@ package body System.BB.Board_Support is
 
    procedure Level3_Dispatch is
       Pending : Unsigned_32;
+      Core    : constant Integer := Integer (Multiprocessors.Current_CPU) - 1;
    begin
+      --  Same deferral as Timer_Interrupt.  NOTE: runs at INTLEVEL 3 so a
+      --  level-5 tick can preempt it; the non-atomic +1/-1 is safe only while
+      --  level 5 is the sole other native level (current coexistence config).
+      In_Native_Int (Core) := In_Native_Int (Core) + 1;
+
       Asm ("rsr.interrupt %0",
            Outputs  => Unsigned_32'Asm_Output ("=r", Pending),
            Volatile => True);
@@ -170,6 +202,8 @@ package body System.BB.Board_Support is
       if System.BB.Threads.Queues.Context_Switch_Needed then
          System.BB.CPU_Primitives.Context_Switch;
       end if;
+
+      In_Native_Int (Core) := In_Native_Int (Core) - 1;
    end Level3_Dispatch;
 
    ----------------------
