@@ -235,11 +235,34 @@ package body System.BB.Board_Support is
       ---------------
 
       procedure Set_Alarm (Ticks : Timer_Interval) is
-         Deadline : constant Timer_Interval := Read_Count + Ticks;
+         Small    : constant Boolean := Ticks < 2 ** 20;
+         Margin   : Timer_Interval := (if Ticks = 0 then 1 else Ticks);
+         Deadline : Timer_Interval;
       begin
-         Asm ("wsr.ccompare2 %0" & ASCII.LF & ASCII.HT & "rsync",
-              Inputs   => Timer_Interval'Asm_Input ("r", Deadline),
-              Volatile => True);
+         --  Arm CCOMPARE2 = CCOUNT + Margin.  The Xtensa CCOMPARE interrupt
+         --  fires ONLY on the exact CCOUNT = CCOMPARE2 match, so a deadline
+         --  that is already in the past when written is MISSED and will not
+         --  fire until CCOUNT wraps a full 2**32 (~17.9 s).  This bites tiny
+         --  intervals: Update_Alarm programs Time_Difference = 1 whenever an
+         --  alarm is due, and CCOUNT advances past CCOUNT+1 between Read_Count
+         --  and the wsr.  A lost alarm desynchronises the alarm bookkeeping
+         --  (Pending_Alarm), so a delayed task then wakes only on the next
+         --  periodic clock update ~Max_Sleep later (ACATS CXD8002 measured
+         --  15.47 s for an 8 us delay).  For a small interval, re-arm with a
+         --  widening margin until the deadline is provably still ahead of
+         --  CCOUNT (modular forward distance in 1 .. 2**31-1).  A large
+         --  interval is billions of ticks ahead and cannot be missed, so arm
+         --  it once -- which also avoids the past/future ambiguity for
+         --  deadlines more than 2**31 ticks away (e.g. Max_Sleep = 7/8*2**32).
+         loop
+            Deadline := Read_Count + Margin;
+            Asm ("wsr.ccompare2 %0" & ASCII.LF & ASCII.HT & "rsync",
+                 Inputs   => Timer_Interval'Asm_Input ("r", Deadline),
+                 Volatile => True);
+            exit when not Small
+              or else Deadline - Read_Count - 1 < 2 ** 31 - 1;
+            Margin := Margin + 64;
+         end loop;
       end Set_Alarm;
 
       -------------------------
