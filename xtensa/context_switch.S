@@ -208,6 +208,24 @@ __gnat_preempt_dispatch:
 	l32i	a1, a7, CTX_SP		/* a1 = the thread's XT_STK frame */
 	movi	a8, _xt_context_restore
 	callx0	a8			/* restore a2-a15, SAR, LOOP from XT_STK */
+
+	/* CXD8002 half-2 FIX.  A thread saved INTERRUPT was spilled by
+	   _xt_context_save (SPILL_ALL_WINDOWS) -> it MUST resume with exactly ONE
+	   live window; its caller frames are on its own stack and reload via window
+	   underflow as it returns.  We were NOT setting WINDOWSTART here, so the
+	   resumed thread inherited the DISPATCHER's stale WINDOWSTART -- e.g. the
+	   idle thread, scheduled after a deep-chain task, ran with that task's
+	   6-frame WINDOWSTART (0x2ab); the next tick's _xt_context_save then spilled
+	   those STALE frames and intermittently hit one with saved SP~=0 -> Double
+	   exception in the spill (EXCVADDR=[0-12]).  Set WINDOWSTART = 1<<WINDOWBASE
+	   (single clean frame) for the resumed thread.  a0 is scratch here. */
+	rsr.windowbase a0
+	ssl	a0			/* SAR = 32 - WINDOWBASE */
+	movi	a0, 1
+	sll	a0, a0			/* a0 = 1 << WINDOWBASE */
+	wsr.windowstart a0
+	rsync
+
 	l32i	a0, a1, XT_STK_PS
 	wsr.ps	a0
 	l32i	a0, a1, XT_STK_PC
