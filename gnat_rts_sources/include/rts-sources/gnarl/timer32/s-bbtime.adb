@@ -97,10 +97,14 @@ package body System.BB.Time is
    --  range. This is always behind the actual time by less than one hardware
    --  clock period. See Update_Clock for read and update protocol.
 
-   Pending_Alarm : Time := Time'Last;
-   --  Time of the current alarm handled by the timer. Used to determine if a
-   --  given alarm is before the current one, and so needs to re-configure the
-   --  timer.
+   Pending_Alarm : array (CPU) of Time := (others => Time'Last);
+   --  Time of the current alarm handled by the timer, PER CPU.  The hardware
+   --  alarm (CCOMPARE2) and the Alarms_Table are per-core, so this bookkeeping
+   --  must be too: a single global was clobbered cross-core (e.g. core1's idle
+   --  clock-keeping Alarm_Handler reset it / re-armed it from its own empty
+   --  queue, stranding a task alarm pending on core0 -- the CXD8002 hang).
+   --  Used to determine if a given alarm is before the current one on this CPU,
+   --  and so needs to re-configure that CPU's timer.
 
    Max_Sleep : Time := 0;
    --  The longest time we can sleep without updating the Software_Clock.
@@ -135,7 +139,7 @@ package body System.BB.Time is
    begin
       --  Make sure there is an alarm pending.
 
-      pragma Assert (Pending_Alarm /= Time'Last);
+      pragma Assert (Pending_Alarm (Current_CPU) /= Time'Last);
 
       Board_Support.Time.Clear_Alarm_Interrupt;
 
@@ -149,13 +153,13 @@ package body System.BB.Time is
 
       if Multiprocessor then
          Lock (Alarm_Lock);
-         Pending_Alarm := Time'Last;
+         Pending_Alarm (Current_CPU) := Time'Last;
          Unlock (Alarm_Lock);
 
       --  No need for lock if not on multiprocessor
 
       else
-         Pending_Alarm := Time'Last;
+         Pending_Alarm (Current_CPU) := Time'Last;
       end if;
 
       Update_Clock (Now);
@@ -415,7 +419,7 @@ package body System.BB.Time is
       --  Establish invariant that there always is a pending alarm at most
       --  Max_Sleep time in the future.
 
-      Pending_Alarm := Clock + Max_Sleep;
+      Pending_Alarm (Current_CPU) := Clock + Max_Sleep;
       Board_Support.Time.Set_Alarm (Clock_Interval (Max_Sleep));
    end Initialize_Timers;
 
@@ -452,11 +456,11 @@ package body System.BB.Time is
       --  If next alarm time is closer than the currently pending alarm,
       --  reprogram the alarm.
 
-      if Alarm < Pending_Alarm then
+      if Alarm < Pending_Alarm (Current_CPU) then
          pragma Assert (Time_Difference in 1 .. Max_Sleep);
 
          Board_Support.Time.Set_Alarm (Clock_Interval (Time_Difference));
-         Pending_Alarm := Alarm;
+         Pending_Alarm (Current_CPU) := Alarm;
       end if;
 
       if Parameters.Multiprocessor then
