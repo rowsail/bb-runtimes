@@ -199,6 +199,20 @@ __gnat_preempt_dispatch:
 	l32i	a5, a7, CTX_LCOUNT
 	wsr	a5, LCOUNT
 	l32i	a5, a7, CTX_PS
+	/* CXD8002 RECURSION FIX.  Force INTLEVEL=15 so the level-5 tick stays masked
+	   through wsr.ps+retw.  The kernel does NOT raise INTLEVEL to 5 in its
+	   critical sections (the timer is a high-priority L5 interrupt), so the PS we
+	   restore here has INTLEVEL < 5.  With a cluster of tiny/overdue delays the
+	   tick is perpetually pending and fires the instant wsr.ps lowers INTLEVEL --
+	   BEFORE the retw -- so the dispatch frame never unwinds and recurses 0xC0
+	   (one XT_STK frame) per tick down the stack until a window spill double-
+	   faults (PC 0x403826a6).  Observed identically on CXD8002 and a 6-task
+	   tiny-delay reproducer: interruptee pinned at this retw, SP marching down.
+	   The resumed thread re-enters the scheduler and Leave_Kernel restores its
+	   real interrupt level immediately, so the extra masking is transient.
+	   a4 is scratch (the window rotates away on retw). */
+	movi	a4, 0x0000000F
+	or	a5, a5, a4
 	wsr.ps	a5
 	rsync
 	retw
@@ -226,14 +240,27 @@ __gnat_preempt_dispatch:
 	wsr.windowstart a0
 	rsync
 
+	/* Atomic interrupt return (CXD8002).  A plain 'wsr.ps' here lowers INTLEVEL
+	   to the resumed thread's level (0) *before* a0/a1 are reloaded and before
+	   the 'rfe', opening a window in which a fresh level-5 tick preempts this
+	   half-restored thread (a1 still = the XT_STK frame, not the thread SP).  The
+	   re-entrant save then detonates later in _xt_context_save's SPILL.  Mask all
+	   interrupts for the (few-insn) restore window with rsil, set EPS_5/EPC_5,
+	   and return with 'rfi 5' which restores PS<-EPS_5 + PC<-EPC_5 atomically --
+	   INTLEVEL stays high right up to the return.  (This path is entered at
+	   INTLEVEL 5 from highint5, 3 from the level-3 vector, or the kernel level
+	   from a cooperative switch; rsil makes it correct from all three.)
+	   a0 is scratch (the WINDOWSTART fix above already clobbered it); a8 must
+	   NOT be touched -- _xt_context_restore has reloaded it as the thread's a8. */
+	rsil	a0, 15
 	l32i	a0, a1, XT_STK_PS
-	wsr.ps	a0
+	wsr.eps5 a0
 	l32i	a0, a1, XT_STK_PC
-	wsr.epc1 a0
+	wsr.epc5 a0
 	l32i	a0, a1, XT_STK_A0
 	l32i	a1, a1, XT_STK_A1
 	rsync
-	rfe
+	rfi	5
 
 /* --------------------------------------------------------------------------
  * __gnat_start_thread -- first-entry trampoline for a new thread.
