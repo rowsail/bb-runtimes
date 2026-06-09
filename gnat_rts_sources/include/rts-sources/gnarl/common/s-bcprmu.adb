@@ -78,6 +78,11 @@ package body System.BB.CPU_Primitives.Multiprocessors is
 
       Threads.Queues.Wakeup_Expired_Alarms (Now);
 
+      --  Re-arm this CPU's timer for its next pending alarm (this poke path
+      --  does NOT otherwise reprogram CCOMPARE -> the next alarm would be lost).
+
+      Time.Rearm_Alarm;
+
       Protection.Leave_Kernel;
    end Poke_Handler;
 

@@ -103,7 +103,7 @@ package body System.BB.Time is
    --  must be too: a single global was clobbered cross-core (e.g. core1's idle
    --  clock-keeping Alarm_Handler reset it / re-armed it from its own empty
    --  queue, stranding a task alarm pending on core0 -- the CXD8002 hang).
-   --  Used to determine if a given alarm is before the current one on this CPU,
+   --  Used to tell whether an alarm is before the current one on this CPU,
    --  and so needs to re-configure that CPU's timer.
 
    Max_Sleep : Time := 0;
@@ -172,31 +172,18 @@ package body System.BB.Time is
 
       if Parameters.Multiprocessor then
 
-         --  This is the alarm CPU, we have to wake up the other CPUs with
-         --  expired alarms.
+         --  Wake any OTHER CPU whose alarm has expired but which has not yet
+         --  serviced it (a poke runs its Poke_Handler).  We do NOT also arm
+         --  THIS CPU's timer for another CPU's future alarm: each CPU keeps its
+         --  own CCOMPARE for its own alarms.  That cross-core "shadow" arm only
+         --  made an alarm storm + extra cross-core context switches, leaving one
+         --  core's timer vestigial -- part of the SMP delay-alarm-loss.
 
          for CPU_Id in CPU loop
-
-            if CPU_Id /= Current_CPU then
-               declare
-                  Alarm_Time : constant Time := Get_Next_Timeout (CPU_Id);
-
-               begin
-                  if Alarm_Time <= Now then
-
-                     --  Alarm expired, wake up the CPU
-
-                     Board_Support.Multiprocessors.Poke_CPU (CPU_Id);
-
-                  else
-                     --  Check if this is the next non-expired alarm of the
-                     --  overall system.
-
-                     if Alarm_Time < Next_Alarm then
-                        Next_Alarm := Alarm_Time;
-                     end if;
-                  end if;
-               end;
+            if CPU_Id /= Current_CPU
+              and then Get_Next_Timeout (CPU_Id) <= Now
+            then
+               Board_Support.Multiprocessors.Poke_CPU (CPU_Id);
             end if;
          end loop;
       end if;
@@ -467,6 +454,33 @@ package body System.BB.Time is
          Unlock (Alarm_Lock);
       end if;
    end Update_Alarm;
+
+   -----------------
+   -- Rearm_Alarm --
+   -----------------
+
+   procedure Rearm_Alarm is
+      Now        : constant Time := Clock;
+      Next_Alarm : Time := Now + Max_Sleep;
+
+   begin
+      --  Poke_Handler woke this CPU's expired alarms but did NOT re-arm the
+      --  timer; the queue head advanced yet Pending_Alarm still holds the
+      --  (passed) woken alarm's time, so a plain Update_Alarm is refused by its
+      --  "closer than Pending_Alarm" guard.  Reset Pending_Alarm (as
+      --  Alarm_Handler does), then reprogram for the next alarm or Max_Sleep.
+
+      if Parameters.Multiprocessor then
+         Lock (Alarm_Lock);
+         Pending_Alarm (Current_CPU) := Time'Last;
+         Unlock (Alarm_Lock);
+      else
+         Pending_Alarm (Current_CPU) := Time'Last;
+      end if;
+
+      Next_Alarm := Time'Min (Get_Next_Timeout (Current_CPU), Next_Alarm);
+      Update_Alarm (Next_Alarm);
+   end Rearm_Alarm;
 
    ------------------
    -- Update_Clock --

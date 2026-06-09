@@ -144,6 +144,13 @@ package System.BB.Time is
    --  Re-configure the timer if "Alarm" is earlier than the Pending_Alarm.
    --  Update_Alarm is the only routine allowed to set an alarm.
 
+   procedure Rearm_Alarm;
+   --  Reset this CPU's Pending_Alarm and reprogram its timer for the next
+   --  pending alarm (clamped to Max_Sleep).  Called from the cross-core
+   --  Poke_Handler, which wakes expired alarms but does NOT otherwise re-arm
+   --  the timer -- without it the next alarm on a poked CPU is lost (the SMP
+   --  delay-alarm-loss strand).
+
    --  Execution time
 
    --  Ada allows reading the execution time of any task. To support that, we

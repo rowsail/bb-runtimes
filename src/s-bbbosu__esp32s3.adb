@@ -235,6 +235,11 @@ package body System.BB.Board_Support is
       function Read_Count return Timer_Interval;
       pragma Inline (Read_Count);
 
+      function Native_Systimer_Count return Unsigned_64
+        with Import, Convention => C,
+             External_Name => "native_systimer_count";
+      --  Raw shared 16 MHz SYSTIMER UNIT0 count (same value on both cores).
+
       ----------------
       -- Read_Count --
       ----------------
@@ -253,8 +258,15 @@ package body System.BB.Board_Support is
       ----------------
 
       function Read_Clock return BB.Time.Time is
+         --  Shared clock: SYSTIMER (16 MHz, identical on both cores) scaled to
+         --  the 240 MHz Time unit (x15), low 32 bits.  Replaces the per-core
+         --  CCOUNT, whose inter-core offset (~tens of ms) desynchronised the SMP
+         --  software clock and stranded delayed tasks.  Set_Alarm still arms
+         --  CCOMPARE2 = CCOUNT + delta (a relative interval), so the CCOUNT
+         --  offset cancels and the hardware alarm is unaffected.
+         Scaled : constant Unsigned_64 := Native_Systimer_Count * 15;
       begin
-         return BB.Time.Time (Read_Count);
+         return BB.Time.Time (Timer_Interval (Scaled and 16#FFFF_FFFF#));
       end Read_Clock;
 
       ------------------------
