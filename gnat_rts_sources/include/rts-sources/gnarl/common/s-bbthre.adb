@@ -126,6 +126,35 @@ package body System.BB.Threads is
       return Id.Active_Priority;
    end Get_Priority;
 
+   --------------------------
+   -- Running_Stack_Bounds --
+   --------------------------
+
+   --  Diagnostic export for the C panic hook (glue.c): report the running
+   --  thread's stack window so a panic can be recognised as a stack overflow.
+   --  Low = Bottom_Of_Stack (the limit; the stack grows down toward it),
+   --  High = Top_Of_Stack (where it starts).  Detection-only: raises nothing.
+
+   procedure Running_Stack_Bounds
+     (Low  : out System.Address;
+      High : out System.Address);
+   pragma Export (C, Running_Stack_Bounds, "__gnat_running_stack_bounds");
+
+   procedure Running_Stack_Bounds
+     (Low  : out System.Address;
+      High : out System.Address)
+   is
+      T : constant Thread_Id := Queues.Running_Thread;
+   begin
+      if T /= Null_Thread_Id then
+         Low  := T.Bottom_Of_Stack;
+         High := T.Top_Of_Stack;
+      else
+         Low  := System.Null_Address;
+         High := System.Null_Address;
+      end if;
+   end Running_Stack_Bounds;
+
    -----------------------
    -- Initialize_Thread --
    -----------------------
