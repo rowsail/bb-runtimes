@@ -258,15 +258,17 @@ package body System.BB.Board_Support is
       ----------------
 
       function Read_Clock return BB.Time.Time is
-         --  Shared clock: SYSTIMER (16 MHz, identical on both cores) scaled to
-         --  the 240 MHz Time unit (x15), low 32 bits.  Replaces the per-core
-         --  CCOUNT, whose inter-core offset (~tens of ms) desynchronised the SMP
-         --  software clock and stranded delayed tasks.  Set_Alarm still arms
-         --  CCOMPARE2 = CCOUNT + delta (a relative interval), so the CCOUNT
-         --  offset cancels and the hardware alarm is unaffected.
-         Scaled : constant Unsigned_64 := Native_Systimer_Count * 15;
+         --  Shared SYSTIMER (16 MHz, identical on both cores) scaled x15 into
+         --  the 240 MHz Time unit.  The systimer is a 52-bit counter, so x15
+         --  (56-bit) fits the 64-bit Time directly: return the FULL value, not
+         --  the low 32 bits.  It is already a shared, monotone clock, so
+         --  System.BB.Time uses it as-is (offset by Epoch in Clock) with NO
+         --  Software_Clock 32-bit-wrap extension -- whose cross-core
+         --  Update_In_Progress retry stalled the highest-frequency reader.
+         --  Replaces per-core CCOUNT (inter-core offset ~tens of ms).  Set_Alarm
+         --  still arms CCOMPARE2 = CCOUNT + delta (relative), offset cancels.
       begin
-         return BB.Time.Time (Timer_Interval (Scaled and 16#FFFF_FFFF#));
+         return BB.Time.Time (Native_Systimer_Count * 15);
       end Read_Clock;
 
       ------------------------

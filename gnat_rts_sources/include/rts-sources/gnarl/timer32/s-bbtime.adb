@@ -207,104 +207,15 @@ package body System.BB.Time is
    -----------
 
    function Clock return Time is
-      First_MSP  : Clock_Periods;
-      Before_MSP : Clock_Periods;
-      Before_LSP : Clock_Interval;
-      Now_LSP    : Clock_Interval;
-      After_MSP  : Clock_Periods;
-
    begin
-      --  Reading the clock needs to access to the software and the hardware
-      --  clock. In a multiprocessor, masking interrupts is not enough because
-      --  the software clock can be updated by another processor. Therefore, we
-      --  keep reading until we get a consistent value (no updates of the
-      --  software MSP while we read the hardware clock).
-
-      --  We can limit the iterations in the loop to 3. In the worst case, if
-      --  the MSP keeps increasing within the loop, it means that we are
-      --  spending an extremely long time in this function (we get preempted
-      --  all the time). If the first time we read 1, and then the MSP gets
-      --  increased, we know that the time is between 1 & X and 2 & X (because
-      --  the software clock can be behind the actual time by at most one
-      --  hardware clock period). It means that the actual time when we entered
-      --  this function was before 3 & 0. In the second iteration we can read
-      --  2 and then get increased again. Hence actual time is between 2 & X
-      --  and 3 & X. Hence, the actual time when we leave function clock is at
-      --  least 2 & 0. However, we do not know when between 2 & 0 and 3 & 0.
-      --  Hence we read a third time, and if we read 3 and then a change, it
-      --  means that the actual time is between 3 & X and 4 & X (so at least
-      --  3 & 0). Hence, at the end of the third iteration, we can return 3 & 0
-      --  as a safe value that is between the beginning and end of the
-      --  execution of this call to Clock.
-
-      for Iteration in 1 .. 3 loop
-
-         --  On multiprocessor systems there may be a concurrent update of the
-         --  software clock (signaled with Update_In_Progress). Retry if this
-         --  happens. On monoprocessors the loop is performed only once.
-
-         loop
-            Before_MSP := Software_Clock.MSP;
-
-            exit when not Multiprocessor
-              or else Before_MSP /= Update_In_Progress;
-         end loop;
-
-         --  After the loop, Before_MSP cannot be equal to Update_In_Progress.
-         --  In the case of multiprocessors because of the exit condition, and
-         --  in the case of monoprocessors because the update is done
-         --  atomically.
-
-         Before_LSP := Software_Clock.LSP;
-
-         Now_LSP := Clock_Interval (Read_Clock);
-
-         After_MSP := Software_Clock.MSP;
-
-         --  If the MSP in Software_Clock has changed (or is changing), we
-         --  do not know the time at which the software clock was updated. It
-         --  is important to note that the implementation does not force the
-         --  software clock to be updated at a time close to the LSP wraparound
-         --  (it needs to be done at least once per hardware clock period, but
-         --  we do not know when). Hence, returning (Before_MSP + 1) & 0 is
-         --  not correct because the updated LSP in the Software_Clock does
-         --  not need to be close to zero.
-
-         --  Normal case, no updates in MSP
-
-         if Before_MSP = After_MSP then
-
-            --  If we know the value of the software clock at the time of the
-            --  read of the hardware clock, we know the time of that read,
-            --  because the software clock can never be more than one period
-            --  behind. Hence, we build a Time value from two consecutive
-            --  readings of the hardware clock (Before_LSP and Now_LSP) and one
-            --  reading of the MSP from the Software_Clock (and we know that
-            --  the MSP did not change between the two readings of Before_LSP
-            --  and Now_LSP).
-
-            return
-              Before_MSP + (if Now_LSP < Before_LSP then 1 else 0) & Now_LSP;
-
-         --  After the first unsuccessful iteration we store the first MSP
-         --  value read to have a reference of the initial time when we entered
-         --  the clock function (before First_MSP + 2 & 0).
-
-         elsif Iteration = 1 then
-            First_MSP := Before_MSP;
-
-         --  During the second or third iteration, if the clock has been
-         --  increased by two or more then Before_MSP & 0 is certainly within
-         --  the beginning and end of the execution of this call to Clock.
-
-         elsif Before_MSP - First_MSP >= 2 then
-            exit;
-         end if;
-      end loop;
-
-      pragma Assert (Before_MSP - First_MSP >= 2);
-
-      return Before_MSP & 0;
+      --  Board_Support.Read_Clock is the ESP32-S3 SYSTIMER: a full, shared,
+      --  monotone 64-bit clock (52-bit counter x15) read identically by both
+      --  cores, so no Software_Clock reconstruction or SMP Update_In_Progress
+      --  retry is needed -- that machinery only extends a 32-bit *wrapping*
+      --  hardware counter, and its cross-core retry stalled the busiest reader.
+      --  Offset by Epoch so Clock stays >= Epoch (Ada.Calendar uses Clock -
+      --  Epoch) and the top bit stays clear (safe Time_Span subtraction).
+      return Epoch + Read_Clock;
    end Clock;
 
    -----------------
@@ -490,38 +401,9 @@ package body System.BB.Time is
    --  called from one processor at a time.
 
    procedure Update_Clock (Now : out Time) is
-      Update_MSP : constant Clock_Periods := Software_Clock.MSP;
-      Update_LSP : constant Clock_Interval := Software_Clock.LSP;
-      Now_LSP    : constant Clock_Interval := Clock_Interval (Read_Clock);
-      Now_MSP    : Clock_Periods;
-
    begin
-      if Now_LSP < Update_LSP then
-         Now_MSP := Update_MSP + 1;
-
-         --  Need to do "atomic" update of both parts of the clock
-
-         --  Mark Software_Clock.MSP as invalid during updates. The read
-         --  protocol is to read Software_Clock.MSP both before and after
-         --  reading Software_Clock.LSP. Only consider the MSP as that
-         --  belonging to the LSP if both values are the same and not equal
-         --  to the special Update_In_Progress value.
-
-         --  Because interrupts are disabled, this special read protocol is
-         --  only necessary on multiprocessor systems.
-
-         Software_Clock.MSP := Update_In_Progress;
-         Software_Clock.LSP := Now_LSP;
-         Software_Clock.MSP := Now_MSP;
-
-      else
-         Now_MSP := Update_MSP;
-
-         --  Only need to change the LSP, so we can do this atomically
-
-         Software_Clock.LSP := Now_LSP;
-      end if;
-
-      Now := Now_MSP & Now_LSP;
+      --  Clock is now the full shared SYSTIMER (no 32-bit wrap to track), so
+      --  the Software_Clock needs no periodic update; just return the time.
+      Now := Epoch + Read_Clock;
    end Update_Clock;
 end System.BB.Time;
