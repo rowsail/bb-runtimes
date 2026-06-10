@@ -36,9 +36,12 @@
 
 pragma Restrictions (No_Elaboration_Code);
 
+with System.Multiprocessors.Fair_Locks;
+
 package body System.BB.Threads.Queues is
 
    use System.Multiprocessors;
+   use System.Multiprocessors.Fair_Locks;
    use System.BB.Board_Support.Multiprocessors;
 
    ----------------
@@ -49,13 +52,28 @@ package body System.BB.Threads.Queues is
    pragma Volatile_Components (Alarms_Table);
    --  Identifier of the thread that is in the first place of the alarm queue
 
-   Cross_Cancel : array (CPU) of Thread_Id := (others => Null_Thread_Id);
+   Cross_Cancel_Max : constant := 16;
+   --  Bounded per-CPU queue of pending cross-core wakeups -- far above any
+   --  realistic number of tasks woken cross-core toward one CPU at once.  On
+   --  the (practically impossible) overflow a single request is dropped,
+   --  degrading just that wakeup to the old at-expiry behaviour.
+
+   Cross_Cancel : array (CPU, 1 .. Cross_Cancel_Max) of Thread_Id :=
+                    (others => (others => Null_Thread_Id));
    pragma Volatile_Components (Cross_Cancel);
-   --  Cross-core delay-abort: a thread Delayed on this CPU that some other CPU
-   --  has asked to alarm-cancel.  The aborting CPU records it here (via
-   --  Request_Cross_Cancel) and Pokes this CPU, whose Poke handler then calls
-   --  Run_Cross_Cancel to do the cancel locally (the alarm queues are per-CPU,
-   --  so the cancel must run on the thread's own CPU).
+   Cross_Cancel_Count : array (CPU) of Natural := (others => 0);
+   pragma Volatile_Components (Cross_Cancel_Count);
+   --  A thread blocked on some CPU that another CPU has asked to wake.  The
+   --  waking CPU enqueues it here (Request_Cross_Cancel) and Pokes the target
+   --  CPU, whose Poke handler calls Run_Cross_Cancel to wake it locally (its
+   --  ready/alarm queues are private to it).
+
+   Cross_Cancel_Lock : Fair_Lock := (Spinning => (others => False),
+                                     Lock     => (Flag => 0));
+   --  Serialises the cross-core producer (Request_Cross_Cancel on the waking
+   --  CPU) against the consumer (Run_Cross_Cancel on the target CPU).
+   --  Enter_Kernel only masks local interrupts, so it cannot protect this
+   --  shared queue against the other CPU.
 
    ---------------------
    -- Change_Priority --
@@ -478,11 +496,16 @@ package body System.BB.Threads.Queues is
    -------------------------
 
    procedure Request_Cross_Cancel (Thread : Thread_Id) is
+      C : constant CPU := Get_CPU (Thread);
    begin
-      --  Thread is Delayed on another CPU; record it for that CPU's Poke
-      --  handler.  Single slot per CPU: concurrent cross-core aborts to the
-      --  same CPU are rare, and a lost one degrades to abort-at-expiry.
-      Cross_Cancel (Get_CPU (Thread)) := Thread;
+      --  Producer: enqueue Thread for CPU C's Poke handler.  Locked because
+      --  C's Run_Cross_Cancel consumes the queue concurrently.
+      Lock (Cross_Cancel_Lock);
+      if Cross_Cancel_Count (C) < Cross_Cancel_Max then
+         Cross_Cancel_Count (C) := Cross_Cancel_Count (C) + 1;
+         Cross_Cancel (C, Cross_Cancel_Count (C)) := Thread;
+      end if;
+      Unlock (Cross_Cancel_Lock);
    end Request_Cross_Cancel;
 
    ----------------------
@@ -490,18 +513,26 @@ package body System.BB.Threads.Queues is
    ----------------------
 
    procedure Run_Cross_Cancel is
-      CPU_Id : constant CPU       := Current_CPU;
-      T      : constant Thread_Id := Cross_Cancel (CPU_Id);
+      CPU_Id : constant CPU := Current_CPU;
+      T      : Thread_Id;
    begin
-      --  Called from this CPU's Poke handler: wake a thread that another CPU
-      --  asked us to wake (its ready/alarm queues are private to this CPU).
-      --  Handle every state -- this serves both the cross-core delay-abort
-      --  (Delayed) and any cross-core wakeup (e.g. a task on another core
-      --  completing its activation handshake with a Suspended waiter here).
-      if T /= Null_Thread_Id then
-         Cross_Cancel (CPU_Id) := Null_Thread_Id;
+      --  Consumer (this CPU's Poke handler): wake every queued thread by state.
+      --  Serves the cross-core delay-abort (Delayed) and any cross-core wakeup
+      --  (e.g. a task on another core completing its activation handshake with
+      --  a Suspended waiter here).  The lock is held across the wakeups so a
+      --  concurrent producer cannot race the queue; the wakeups touch only THIS
+      --  CPU's ready/alarm queues (already under the kernel lock), never
+      --  Cross_Cancel_Lock, so there is no nested-lock hazard.
+      Lock (Cross_Cancel_Lock);
 
-         if T.State = Delayed then
+      for I in 1 .. Cross_Cancel_Count (CPU_Id) loop
+         T := Cross_Cancel (CPU_Id, I);
+         Cross_Cancel (CPU_Id, I) := Null_Thread_Id;
+
+         if T = Null_Thread_Id then
+            null;
+
+         elsif T.State = Delayed then
             --  Blocked in a delay: unlink its alarm and make it Runnable.
             Cancel_Alarm (T);
 
@@ -511,12 +542,17 @@ package body System.BB.Threads.Queues is
             Insert (T);
 
          else
-            --  Not yet suspended (the waker beat the sleeper): leave the
-            --  Wakeup_Signaled breadcrumb so the imminent Sleep is a no-op,
-            --  exactly as the ordinary BB Wakeup does.
+            --  Already Runnable (waker beat the sleeper, or an earlier
+            --  duplicate request already woke it): leave the Wakeup_Signaled
+            --  breadcrumb so an imminent Sleep is a no-op, as the ordinary BB
+            --  Wakeup does.  The state guard makes a duplicate wake idempotent
+            --  (no re-Insert of an already-ready thread).
             T.Wakeup_Signaled := True;
          end if;
-      end if;
+      end loop;
+
+      Cross_Cancel_Count (CPU_Id) := 0;
+      Unlock (Cross_Cancel_Lock);
    end Run_Cross_Cancel;
 
    -----------
