@@ -493,14 +493,28 @@ package body System.BB.Threads.Queues is
       CPU_Id : constant CPU       := Current_CPU;
       T      : constant Thread_Id := Cross_Cancel (CPU_Id);
    begin
-      --  Called from this CPU's Poke handler: consume a pending request.
+      --  Called from this CPU's Poke handler: wake a thread that another CPU
+      --  asked us to wake (its ready/alarm queues are private to this CPU).
+      --  Handle every state -- this serves both the cross-core delay-abort
+      --  (Delayed) and any cross-core wakeup (e.g. a task on another core
+      --  completing its activation handshake with a Suspended waiter here).
       if T /= Null_Thread_Id then
          Cross_Cancel (CPU_Id) := Null_Thread_Id;
 
-         --  Re-check the state: the target may have expired naturally between
-         --  the request and the poke.
          if T.State = Delayed then
+            --  Blocked in a delay: unlink its alarm and make it Runnable.
             Cancel_Alarm (T);
+
+         elsif T.State = Suspended then
+            --  Blocked (entry / activation / suspension): make it Runnable.
+            T.State := Runnable;
+            Insert (T);
+
+         else
+            --  Not yet suspended (the waker beat the sleeper): leave the
+            --  Wakeup_Signaled breadcrumb so the imminent Sleep is a no-op,
+            --  exactly as the ordinary BB Wakeup does.
+            T.Wakeup_Signaled := True;
          end if;
       end if;
    end Run_Cross_Cancel;

@@ -39,6 +39,13 @@ with System.BB.Time;
 package body System.BB.CPU_Primitives.Multiprocessors is
    use System.Multiprocessors;
 
+   Slaves_Started : Boolean := False;
+   pragma Atomic (Slaves_Started);
+   --  Guards the slave bring-up so Start_All_CPUs is idempotent: it can be
+   --  triggered early (the first time the environment task blocks, so a
+   --  cross-core task created during elaboration actually runs) and the
+   --  binder's end-of-adainit call then becomes a no-op.
+
    --------------------
    -- Start_All_CPUs --
    --------------------
@@ -50,6 +57,13 @@ package body System.BB.CPU_Primitives.Multiprocessors is
       if System.Multiprocessors.Number_Of_CPUs = 1 then
          return;
       end if;
+
+      --  Start the slaves at most once
+
+      if Slaves_Started then
+         return;
+      end if;
+      Slaves_Started := True;
 
       System.BB.Board_Support.Multiprocessors.Start_All_CPUs;
    end Start_All_CPUs;
@@ -97,41 +111,44 @@ package body System.BB.CPU_Primitives.Multiprocessors is
 
    function Cancel_Delay (Thread : System.BB.Threads.Thread_Id) return Boolean is
       use type System.BB.Threads.Thread_States;
-      Thread_CPU  : constant System.Multiprocessors.CPU :=
-                      Threads.Get_CPU (Thread);
-      Was_Delayed : Boolean;
+      Thread_CPU : constant System.Multiprocessors.CPU :=
+                     Threads.Get_CPU (Thread);
+      Handled    : Boolean;
    begin
       Protection.Enter_Kernel;
 
-      --  Act only if the target is actually blocked in a delay.  (A task on a
-      --  protected entry is Suspended and a CPU-bound one Runnable -- neither
-      --  is woken here; this is specifically the prompt delay-abort path.)
+      if Thread_CPU /=
+           System.BB.Board_Support.Multiprocessors.Current_CPU
+      then
+         --  Cross-core wakeup of ANY state.  The target's ready and alarm
+         --  queues are private to its own CPU, so record the request and Poke
+         --  that CPU, whose Poke_Handler calls Run_Cross_Cancel to wake it
+         --  locally (Delayed -> cancel alarm, Suspended -> Runnable+Insert).
+         --  This serves both the cross-core delay-abort and any other cross-
+         --  core wakeup -- notably a task on another core completing its
+         --  activation handshake with a Suspended waiter (e.g. the env).
 
-      Was_Delayed := Thread.State = Threads.Delayed;
+         Threads.Queues.Request_Cross_Cancel (Thread);
+         System.BB.Board_Support.Multiprocessors.Poke_CPU (Thread_CPU);
+         Handled := True;
 
-      if Was_Delayed then
-         if Thread_CPU =
-              System.BB.Board_Support.Multiprocessors.Current_CPU
-         then
-            --  Same core: unlink the alarm and make the task Runnable directly.
-            --  It resumes from Delay_Until at the next scheduling point and
-            --  raises Abort_Signal at its Abort_Undefer -- the same wake the
-            --  timer would have done at the natural expiry, just now.
+      elsif Thread.State = Threads.Delayed then
+         --  Same core, blocked in a delay: unlink the alarm and make Runnable.
+         --  It resumes from Delay_Until and raises Abort_Signal at its
+         --  Abort_Undefer -- the wake the timer would have done at expiry, now.
 
-            Threads.Queues.Cancel_Alarm (Thread);
+         Threads.Queues.Cancel_Alarm (Thread);
+         Handled := True;
 
-         else
-            --  Other core: its alarm sits in that CPU's queue, which only that
-            --  CPU may modify.  Record the request and Poke it; that CPU's
-            --  Poke_Handler calls Run_Cross_Cancel to do the cancel locally.
+      else
+         --  Same core, not Delayed (Suspended / Runnable): the ordinary BB
+         --  Wakeup handles it correctly, so let the caller use that.
 
-            Threads.Queues.Request_Cross_Cancel (Thread);
-            System.BB.Board_Support.Multiprocessors.Poke_CPU (Thread_CPU);
-         end if;
+         Handled := False;
       end if;
 
       Protection.Leave_Kernel;
-      return Was_Delayed;
+      return Handled;
    end Cancel_Delay;
 
 end System.BB.CPU_Primitives.Multiprocessors;
