@@ -286,6 +286,24 @@ package body System.BB.Threads.Queues is
       CPU_Id      : constant CPU := Get_CPU (Thread);
 
    begin
+      --  Cross-core insert onto an already-STARTED CPU (e.g. a task created
+      --  post-elaboration -- declared inside a subprogram -- and pinned to
+      --  another core).  That CPU's ready queue is private to it, so we cannot
+      --  touch it here: mark the thread Suspended, hand it to the cross-core
+      --  wakeup mechanism and Poke the target, whose Run_Cross_Cancel does
+      --  Suspended -> Runnable + Insert locally.  During elaboration the target
+      --  is not yet started (Running = null), so the direct path below is taken,
+      --  exactly as before.
+
+      if CPU_Id /= Current_CPU
+        and then Running_Thread_Table (CPU_Id) /= Null_Thread_Id
+      then
+         Thread.State := Suspended;
+         Request_Cross_Cancel (Thread);
+         Poke_CPU (CPU_Id);
+         return;
+      end if;
+
       --  A CPU can only insert a task to its own queue, except during
       --  elaboration where the environment task (that can execute only on the
       --  first CPU) will add new tasks to their respective CPU's queues. The

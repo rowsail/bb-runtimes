@@ -153,10 +153,6 @@ package body System.BB.Threads is
       Id.Global_List := Queues.Global_List;
       Queues.Global_List := Id;
 
-      --  Insert task inside the ready list (as last within its priority)
-
-      Queues.Insert (Id);
-
       --  Store stack information
 
       Id.Top_Of_Stack := Stack_Top;
@@ -193,6 +189,14 @@ package body System.BB.Threads is
          Stack_Pointer   => (if System.Parameters.Stack_Grows_Down
                              then Id.Top_Of_Stack
                              else Id.Bottom_Of_Stack));
+
+      --  Make the thread schedulable LAST, so its descriptor (state, stack,
+      --  register context) is fully initialised before it can run.  This
+      --  matters for a thread pinned to another, already-running CPU: Insert
+      --  hands it to that CPU (cross-core), which would otherwise schedule it
+      --  with an incomplete context.
+
+      Queues.Insert (Id);
    end Initialize_Thread;
 
    ----------------
