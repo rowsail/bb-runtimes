@@ -295,6 +295,23 @@ package System.BB.Threads.Queues is
      Post =>
        Get_Next_Alarm_Time (BOSUMU.Current_CPU) > Now;
 
+   procedure Cancel_Alarm (Thread : Thread_Id) with
+   --  Unlink a Delayed Thread from its CPU's alarm queue, make it Runnable and
+   --  insert it in the ready queue (the per-thread Wakeup_Expired_Alarms, for
+   --  prompt delay-abort).  Must run on the thread's own CPU.
+
+     Pre => Thread /= Null_Thread_Id and then Thread.State = Delayed;
+
+   procedure Request_Cross_Cancel (Thread : Thread_Id) with
+   --  Record that Thread (Delayed on another CPU) must be alarm-cancelled; the
+   --  aborter then Pokes Get_CPU (Thread).
+
+     Pre => Thread /= Null_Thread_Id;
+
+   procedure Run_Cross_Cancel;
+   --  Consume a pending cross-CPU cancel request on the current CPU (called
+   --  from the Poke handler, under the kernel lock).
+
    -----------------
    -- Global_List --
    -----------------

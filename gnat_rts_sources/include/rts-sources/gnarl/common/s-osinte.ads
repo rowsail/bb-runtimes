@@ -46,6 +46,7 @@ with System.BB.Threads.Queues;
 with System.BB.Time;
 with System.BB.Interrupts;
 with System.BB.Board_Support;
+with System.BB.CPU_Primitives.Multiprocessors;
 with System.BB.Parameters;
 
 package System.OS_Interface is
@@ -156,6 +157,12 @@ package System.OS_Interface is
 
    function Thread_Self return Thread_Id renames System.BB.Threads.Thread_Self;
    --  Return the thread identifier for the calling task
+
+   function Cancel_Delay (Thread : Thread_Id) return Boolean
+     renames System.BB.CPU_Primitives.Multiprocessors.Cancel_Delay;
+   --  Prompt delay-abort: if Thread is blocked in Delay_Until, wake it now and
+   --  return True (so abort takes effect immediately, not at the natural
+   --  expiry); return False if it was not Delayed (use ordinary Wakeup then).
 
    ----------
    -- ATCB --

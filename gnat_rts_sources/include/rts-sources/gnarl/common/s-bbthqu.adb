@@ -49,6 +49,14 @@ package body System.BB.Threads.Queues is
    pragma Volatile_Components (Alarms_Table);
    --  Identifier of the thread that is in the first place of the alarm queue
 
+   Cross_Cancel : array (CPU) of Thread_Id := (others => Null_Thread_Id);
+   pragma Volatile_Components (Cross_Cancel);
+   --  Cross-core delay-abort: a thread Delayed on this CPU that some other CPU
+   --  has asked to alarm-cancel.  The aborting CPU records it here (via
+   --  Request_Cross_Cancel) and Pokes this CPU, whose Poke handler then calls
+   --  Run_Cross_Cancel to do the cancel locally (the alarm queues are per-CPU,
+   --  so the cancel must run on the thread's own CPU).
+
    ---------------------
    -- Change_Priority --
    ---------------------
@@ -423,6 +431,79 @@ package body System.BB.Threads.Queues is
 
       --  Note: the caller (BB.Time.Alarm_Handler) must set the next alarm
    end Wakeup_Expired_Alarms;
+
+   ------------------
+   -- Cancel_Alarm --
+   ------------------
+
+   procedure Cancel_Alarm (Thread : Thread_Id) is
+      CPU_Id : constant CPU := Get_CPU (Thread);
+      Aux    : Thread_Id;
+
+   begin
+      --  Per-thread analogue of Wakeup_Expired_Alarms, for prompt delay-abort:
+      --  unlink Thread (which is Delayed) from this CPU's alarm queue, then make
+      --  it Runnable and insert it in the ready queue so it resumes from its
+      --  delay and raises Abort_Signal now, rather than at the natural expiry.
+      --  Must run on the thread's own CPU (Insert below asserts CPU_Id =
+      --  Current_CPU).  No timer re-arm is needed: if Thread was the queue head
+      --  the stale CCOMPARE simply fires once early and the handler re-arms.
+
+      pragma Assert (Thread.State = Delayed);
+
+      --  Unlink from the alarm queue, whether head or interior
+
+      if Alarms_Table (CPU_Id) = Thread then
+         Alarms_Table (CPU_Id) := Thread.Next_Alarm;
+      else
+         Aux := Alarms_Table (CPU_Id);
+         while Aux /= Null_Thread_Id and then Aux.Next_Alarm /= Thread loop
+            Aux := Aux.Next_Alarm;
+         end loop;
+
+         if Aux /= Null_Thread_Id then
+            Aux.Next_Alarm := Thread.Next_Alarm;
+         end if;
+      end if;
+
+      Thread.Alarm_Time := System.BB.Time.Time'Last;
+      Thread.Next_Alarm := Null_Thread_Id;
+      Thread.State      := Runnable;
+
+      Insert (Thread);
+   end Cancel_Alarm;
+
+   -------------------------
+   -- Request_Cross_Cancel --
+   -------------------------
+
+   procedure Request_Cross_Cancel (Thread : Thread_Id) is
+   begin
+      --  Thread is Delayed on another CPU; record it for that CPU's Poke
+      --  handler.  Single slot per CPU: concurrent cross-core aborts to the
+      --  same CPU are rare, and a lost one degrades to abort-at-expiry.
+      Cross_Cancel (Get_CPU (Thread)) := Thread;
+   end Request_Cross_Cancel;
+
+   ----------------------
+   -- Run_Cross_Cancel --
+   ----------------------
+
+   procedure Run_Cross_Cancel is
+      CPU_Id : constant CPU       := Current_CPU;
+      T      : constant Thread_Id := Cross_Cancel (CPU_Id);
+   begin
+      --  Called from this CPU's Poke handler: consume a pending request.
+      if T /= Null_Thread_Id then
+         Cross_Cancel (CPU_Id) := Null_Thread_Id;
+
+         --  Re-check the state: the target may have expired naturally between
+         --  the request and the poke.
+         if T.State = Delayed then
+            Cancel_Alarm (T);
+         end if;
+      end if;
+   end Run_Cross_Cancel;
 
    -----------
    -- Yield --

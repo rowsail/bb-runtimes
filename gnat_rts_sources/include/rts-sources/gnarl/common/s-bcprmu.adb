@@ -78,6 +78,11 @@ package body System.BB.CPU_Primitives.Multiprocessors is
 
       Threads.Queues.Wakeup_Expired_Alarms (Now);
 
+      --  Prompt delay-abort: a remote CPU may have asked us to alarm-cancel a
+      --  task Delayed on this CPU (it cannot touch our per-CPU alarm queue).
+
+      Threads.Queues.Run_Cross_Cancel;
+
       --  Re-arm this CPU's timer for its next pending alarm (this poke path
       --  does NOT otherwise reprogram CCOMPARE -> the next alarm would be lost).
 
@@ -85,5 +90,48 @@ package body System.BB.CPU_Primitives.Multiprocessors is
 
       Protection.Leave_Kernel;
    end Poke_Handler;
+
+   ------------------
+   -- Cancel_Delay --
+   ------------------
+
+   function Cancel_Delay (Thread : System.BB.Threads.Thread_Id) return Boolean is
+      use type System.BB.Threads.Thread_States;
+      Thread_CPU  : constant System.Multiprocessors.CPU :=
+                      Threads.Get_CPU (Thread);
+      Was_Delayed : Boolean;
+   begin
+      Protection.Enter_Kernel;
+
+      --  Act only if the target is actually blocked in a delay.  (A task on a
+      --  protected entry is Suspended and a CPU-bound one Runnable -- neither
+      --  is woken here; this is specifically the prompt delay-abort path.)
+
+      Was_Delayed := Thread.State = Threads.Delayed;
+
+      if Was_Delayed then
+         if Thread_CPU =
+              System.BB.Board_Support.Multiprocessors.Current_CPU
+         then
+            --  Same core: unlink the alarm and make the task Runnable directly.
+            --  It resumes from Delay_Until at the next scheduling point and
+            --  raises Abort_Signal at its Abort_Undefer -- the same wake the
+            --  timer would have done at the natural expiry, just now.
+
+            Threads.Queues.Cancel_Alarm (Thread);
+
+         else
+            --  Other core: its alarm sits in that CPU's queue, which only that
+            --  CPU may modify.  Record the request and Poke it; that CPU's
+            --  Poke_Handler calls Run_Cross_Cancel to do the cancel locally.
+
+            Threads.Queues.Request_Cross_Cancel (Thread);
+            System.BB.Board_Support.Multiprocessors.Poke_CPU (Thread_CPU);
+         end if;
+      end if;
+
+      Protection.Leave_Kernel;
+      return Was_Delayed;
+   end Cancel_Delay;
 
 end System.BB.CPU_Primitives.Multiprocessors;
