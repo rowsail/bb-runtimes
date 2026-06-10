@@ -37,6 +37,7 @@
 	.set	XT_STK_PS,  8
 	.set	XT_STK_A0,  12
 	.set	XT_STK_A1,  16
+	.set	XT_STK_SAR, 76
 
 /* --------------------------------------------------------------------------
  * void __gnat_context_switch (Address running_slot, Address first_slot);
@@ -239,6 +240,15 @@ __gnat_preempt_dispatch:
 	sll	a0, a0			/* a0 = 1 << WINDOWBASE */
 	wsr.windowstart a0
 	rsync
+
+	/* SAR FIX (delay-strand root cause; see highint5.S .Lhi5_resume).  The
+	   `ssl a0` above set SAR = 32-WINDOWBASE, CLOBBERING the interruptee SAR
+	   that _xt_context_restore restored.  A preempted 64-bit divide /
+	   Scaled_Divide / Mul_Div (which shift by SAR) then resumes with a wrong
+	   shift amount and silently tears (plain __muldi3 uses no SAR, so it was
+	   immune).  Reload the saved SAR.  a0 scratch; a1 still = the XT_STK frame. */
+	l32i	a0, a1, XT_STK_SAR
+	wsr.sar	a0
 
 	/* Atomic interrupt return (CXD8002).  A plain 'wsr.ps' here lowers INTLEVEL
 	   to the resumed thread's level (0) *before* a0/a1 are reloaded and before
