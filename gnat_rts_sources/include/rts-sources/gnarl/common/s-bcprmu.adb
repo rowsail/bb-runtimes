@@ -30,7 +30,6 @@ pragma Restrictions (No_Elaboration_Code);
 
 with System.Multiprocessors;
 with System.BB.Board_Support;
-with System.BB.Threads;
 with System.BB.Threads.Queues;
 with System.BB.Protection;
 with System.BB.Timing_Events;
@@ -98,7 +97,7 @@ package body System.BB.CPU_Primitives.Multiprocessors is
       Threads.Queues.Run_Cross_Cancel;
 
       --  Re-arm this CPU's timer for its next pending alarm (this poke path
-      --  does NOT otherwise reprogram CCOMPARE -> the next alarm would be lost).
+      --  does NOT otherwise reprogram CCOMPARE -> the next alarm is lost).
 
       Time.Rearm_Alarm;
 
@@ -109,7 +108,8 @@ package body System.BB.CPU_Primitives.Multiprocessors is
    -- Cancel_Delay --
    ------------------
 
-   function Cancel_Delay (Thread : System.BB.Threads.Thread_Id) return Boolean is
+   function Cancel_Delay
+     (Thread : System.BB.Threads.Thread_Id) return Boolean is
       use type System.BB.Threads.Thread_States;
       Thread_CPU : constant System.Multiprocessors.CPU :=
                      Threads.Get_CPU (Thread);
@@ -135,7 +135,7 @@ package body System.BB.CPU_Primitives.Multiprocessors is
       elsif Thread.State = Threads.Delayed then
          --  Same core, blocked in a delay: unlink the alarm and make Runnable.
          --  It resumes from Delay_Until and raises Abort_Signal at its
-         --  Abort_Undefer -- the wake the timer would have done at expiry, now.
+         --  Abort_Undefer -- the wake the timer would do at expiry, now.
 
          Threads.Queues.Cancel_Alarm (Thread);
          Handled := True;

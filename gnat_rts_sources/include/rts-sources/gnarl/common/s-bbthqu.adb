@@ -291,8 +291,8 @@ package body System.BB.Threads.Queues is
       --  another core).  That CPU's ready queue is private to it, so we cannot
       --  touch it here: mark the thread Suspended, hand it to the cross-core
       --  wakeup mechanism and Poke the target, whose Run_Cross_Cancel does
-      --  Suspended -> Runnable + Insert locally.  During elaboration the target
-      --  is not yet started (Running = null), so the direct path below is taken,
+      --  Suspended -> Runnable + Insert locally. During elaboration the target
+      --  is not yet started (Running=null), so the direct path below is taken,
       --  exactly as before.
 
       if CPU_Id /= Current_CPU
@@ -478,11 +478,11 @@ package body System.BB.Threads.Queues is
 
    begin
       --  Per-thread analogue of Wakeup_Expired_Alarms, for prompt delay-abort:
-      --  unlink Thread (which is Delayed) from this CPU's alarm queue, then make
+      --  unlink Thread (Delayed) from this CPU's alarm queue, then make
       --  it Runnable and insert it in the ready queue so it resumes from its
       --  delay and raises Abort_Signal now, rather than at the natural expiry.
       --  Must run on the thread's own CPU (Insert below asserts CPU_Id =
-      --  Current_CPU).  No timer re-arm is needed: if Thread was the queue head
+      --  Current_CPU). No timer re-arm is needed: if Thread was the queue head
       --  the stale CCOMPARE simply fires once early and the handler re-arms.
 
       pragma Assert (Thread.State = Delayed);
@@ -534,11 +534,11 @@ package body System.BB.Threads.Queues is
       CPU_Id : constant CPU := Current_CPU;
       T      : Thread_Id;
    begin
-      --  Consumer (this CPU's Poke handler): wake every queued thread by state.
+      --  Consumer (this CPU's Poke handler): wake each queued thread by state.
       --  Serves the cross-core delay-abort (Delayed) and any cross-core wakeup
       --  (e.g. a task on another core completing its activation handshake with
       --  a Suspended waiter here).  The lock is held across the wakeups so a
-      --  concurrent producer cannot race the queue; the wakeups touch only THIS
+      --  concurrent producer cannot race the queue; wakeups touch only THIS
       --  CPU's ready/alarm queues (already under the kernel lock), never
       --  Cross_Cancel_Lock, so there is no nested-lock hazard.
       Lock (Cross_Cancel_Lock);

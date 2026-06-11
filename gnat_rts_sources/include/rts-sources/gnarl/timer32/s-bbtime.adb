@@ -71,12 +71,9 @@ package body System.BB.Time is
      (Time (Left) * (Time (Max_Timer_Interval) + 1) + Time (Right));
    --  Combine MSP and LSP of clock to form time
 
-   Update_In_Progress : constant Clock_Periods := 0;
-   Periods_In_Epoch   : constant Clock_Periods := 1;
-   --  Special value to signify Last_Clock_Update is going on, so on
-   --  multiprocessor systems can avoid race conditions during updates.
-   --  Choose 0, and have epoch start at 1, so Unsynchronized_Clock can
-   --  ignore updates and just return an early time instead.
+   Periods_In_Epoch : constant Clock_Periods := 1;
+   --  Epoch starts at 1 (not 0) so Unsynchronized_Clock can ignore an
+   --  in-progress update and return an early time instead.
 
    type Composite_Time is record
       MSP : Clock_Periods  := Periods_In_Epoch;
@@ -93,6 +90,11 @@ package body System.BB.Time is
    --  No_Elaboration_Code).
 
    Software_Clock : Composite_Time;
+   pragma Warnings (Off, Software_Clock);
+   --  Vestigial: Read_Clock now reads the shared SYSTIMER directly, so the
+   --  software clock is only seeded (never read back).  Suppress the
+   --  assigned-but-never-read warning rather than unwind the donor
+   --  Composite_Time machinery.
    --  Clock with same time-base as hardware clock, but allowing a larger
    --  range. This is always behind the actual time by less than one hardware
    --  clock period. See Update_Clock for read and update protocol.
@@ -174,9 +176,9 @@ package body System.BB.Time is
 
          --  Wake any OTHER CPU whose alarm has expired but which has not yet
          --  serviced it (a poke runs its Poke_Handler).  We do NOT also arm
-         --  THIS CPU's timer for another CPU's future alarm: each CPU keeps its
-         --  own CCOMPARE for its own alarms.  That cross-core "shadow" arm only
-         --  made an alarm storm + extra cross-core context switches, leaving one
+         --  THIS CPU's timer for another CPU's alarm: each CPU keeps its
+         --  own CCOMPARE for its own alarms. That cross-core "shadow" arm only
+         --  made an alarm storm + extra cross-core switches, leaving one
          --  core's timer vestigial -- part of the SMP delay-alarm-loss.
 
          for CPU_Id in CPU loop
@@ -212,7 +214,7 @@ package body System.BB.Time is
       --  monotone 64-bit clock (52-bit counter x15) read identically by both
       --  cores, so no Software_Clock reconstruction or SMP Update_In_Progress
       --  retry is needed -- that machinery only extends a 32-bit *wrapping*
-      --  hardware counter, and its cross-core retry stalled the busiest reader.
+      --  hardware counter, its cross-core retry stalled the busiest reader.
       --  Offset by Epoch so Clock stays >= Epoch (Ada.Calendar uses Clock -
       --  Epoch) and the top bit stays clear (safe Time_Span subtraction).
       return Epoch + Read_Clock;
@@ -377,7 +379,7 @@ package body System.BB.Time is
    begin
       --  Poke_Handler woke this CPU's expired alarms but did NOT re-arm the
       --  timer; the queue head advanced yet Pending_Alarm still holds the
-      --  (passed) woken alarm's time, so a plain Update_Alarm is refused by its
+      --  (passed) woken alarm's time, so plain Update_Alarm is refused by its
       --  "closer than Pending_Alarm" guard.  Reset Pending_Alarm (as
       --  Alarm_Handler does), then reprogram for the next alarm or Max_Sleep.
 

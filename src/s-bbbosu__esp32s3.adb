@@ -265,7 +265,7 @@ package body System.BB.Board_Support is
          --  System.BB.Time uses it as-is (offset by Epoch in Clock) with NO
          --  Software_Clock 32-bit-wrap extension -- whose cross-core
          --  Update_In_Progress retry stalled the highest-frequency reader.
-         --  Replaces per-core CCOUNT (inter-core offset ~tens of ms).  Set_Alarm
+         --  Replaces per-core CCOUNT (offset ~tens of ms). Set_Alarm
          --  still arms CCOMPARE2 = CCOUNT + delta (relative), offset cancels.
       begin
          return BB.Time.Time (Native_Systimer_Count * 15);
