@@ -39,6 +39,14 @@ package body System.BB.Board_Support is
    Poke_Interrupt_Bit   : constant Unsigned_32 := 2 ** 31;  --  CPU_INT 31 (L5)
    Device_Interrupt_Id  : constant := 23;                   --  CPU_INT 23 (L3)
    Device_Interrupt_Bit : constant Unsigned_32 := 2 ** Device_Interrupt_Id;
+
+   --  Level-2 device interrupt slots (CPU_INT 19/20/21 = Device_L2_0/1/2).
+   L2_0_Id  : constant System.BB.Interrupts.Interrupt_ID := 19;
+   L2_1_Id  : constant System.BB.Interrupts.Interrupt_ID := 20;
+   L2_2_Id  : constant System.BB.Interrupts.Interrupt_ID := 21;
+   L2_0_Bit : constant Unsigned_32 := 2 ** 19;
+   L2_1_Bit : constant Unsigned_32 := 2 ** 20;
+   L2_2_Bit : constant Unsigned_32 := 2 ** 21;
    --  The single level-5 vector serves both the timer (CCOMPARE2) and the
    --  cross-core poke; Timer_Interrupt reads the INTERRUPT register to see
    --  which fired.  The poke is a FROM_CPU matrix source routed to CPU_INT 31
@@ -100,6 +108,12 @@ package body System.BB.Board_Support is
    --  Called from the native level-3 vector: ack the device source, run its
    --  GNARL handler (Interrupt_Wrapper), then the interrupt-epilogue context
    --  switch -- the same shape as Timer_Interrupt but for level 3.
+
+   procedure Level2_Dispatch
+     with Export, Convention => C, External_Name => "__gnat_level2_dispatch";
+   --  Level-2 device dispatch (CPU_INT 19/20/21).  Like Level3_Dispatch but
+   --  with an atomic native-nesting bump: L2 can be preempted by L3/L5 (which,
+   --  sitting at the top of their nests, don't need that).
 
    procedure Park_Alarm;
    --  Push CCOMPARE2 ~a full period ahead so int 16 cannot fire spuriously
@@ -205,6 +219,51 @@ package body System.BB.Board_Support is
 
       In_Native_Int (Core) := In_Native_Int (Core) - 1;
    end Level3_Dispatch;
+
+   ---------------------
+   -- Level2_Dispatch --
+   ---------------------
+
+   procedure Level2_Dispatch is
+      Pending : Unsigned_32;
+      Saved   : Unsigned_32;
+      Core    : constant Integer := Integer (Multiprocessors.Current_CPU) - 1;
+   begin
+      --  Enter the native interrupt.  Unlike L3/L5, level 2 can be preempted
+      --  by a higher native level (L3 or the L5 tick) *during* this counter
+      --  bump; that could leave In_Native_Int transiently 0 and let the higher
+      --  level context-switch out of this still-active dispatch.  So mask all
+      --  interrupts across the bump (rsil 15) to make it atomic.
+      Asm ("rsil %0, 15",
+           Outputs => Unsigned_32'Asm_Output ("=r", Saved), Volatile => True);
+      In_Native_Int (Core) := In_Native_Int (Core) + 1;
+      Asm ("wsr.ps %0" & ASCII.LF & ASCII.HT & "rsync",
+           Inputs => Unsigned_32'Asm_Input ("r", Saved), Volatile => True);
+
+      Asm ("rsr.interrupt %0",
+           Outputs  => Unsigned_32'Asm_Output ("=r", Pending),
+           Volatile => True);
+
+      if (Pending and L2_0_Bit) /= 0 then
+         System.BB.Interrupts.Interrupt_Wrapper (L2_0_Id);
+      end if;
+      if (Pending and L2_1_Bit) /= 0 then
+         System.BB.Interrupts.Interrupt_Wrapper (L2_1_Id);
+      end if;
+      if (Pending and L2_2_Bit) /= 0 then
+         System.BB.Interrupts.Interrupt_Wrapper (L2_2_Id);
+      end if;
+
+      if System.BB.Threads.Queues.Context_Switch_Needed then
+         System.BB.CPU_Primitives.Context_Switch;
+      end if;
+
+      Asm ("rsil %0, 15",
+           Outputs => Unsigned_32'Asm_Output ("=r", Saved), Volatile => True);
+      In_Native_Int (Core) := In_Native_Int (Core) - 1;
+      Asm ("wsr.ps %0" & ASCII.LF & ASCII.HT & "rsync",
+           Inputs => Unsigned_32'Asm_Input ("r", Saved), Volatile => True);
+   end Level2_Dispatch;
 
    ----------------------
    -- Initialize_Board --
