@@ -25,6 +25,7 @@
 	.set	CTX_SP, 0	/* a1: stack pointer at the switch point  */
 	.set	CTX_PS, 8	/* PS (processor state)                   */
 	.set	CTX_A0, 12	/* a0: return address (call-size encoded) */
+	.set	CTX_TPTR,   16	/* THREADPTR (thread-local storage base)  */
 	.set	CTX_CP, 20	/* CP_State: ptr to the 72-byte FPU save  */
 	.set	CTX_SAR,    24	/* SAR (shift amount register)            */
 	.set	CTX_LBEG,   28	/* LBEG  \                                */
@@ -78,6 +79,8 @@ __gnat_context_switch:
 	s32i	a5, a4, CTX_LCOUNT
 	movi	a5, 0
 	s32i	a5, a4, CTX_KIND	/* solicited */
+	rur.threadptr	a5		/* save THREADPTR (TLS base) */
+	s32i	a5, a4, CTX_TPTR
 
 	l32i	a8, a4, CTX_CP
 	beqz	a8, .Lcs_nofp
@@ -126,6 +129,8 @@ __gnat_preempt_dispatch:
 	s32i	a1, a4, CTX_SP		/* SP = its XT_STK frame             */
 	movi	a5, 1
 	s32i	a5, a4, CTX_KIND	/* interrupt */
+	rur.threadptr	a5		/* save THREADPTR (TLS base) */
+	s32i	a5, a4, CTX_TPTR
 
 	l32i	a8, a4, CTX_CP
 	beqz	a8, .Lpd_nofp
@@ -185,6 +190,8 @@ __gnat_preempt_dispatch:
 	l32i	a9, a8, 68
 	wur.fsr	a9
 .Lresume_nofp:
+	l32i	a8, a7, CTX_TPTR	/* restore THREADPTR (TLS base) */
+	wur.threadptr	a8
 	l32i	a6, a7, CTX_KIND
 	bnez	a6, .Lresume_int
 
