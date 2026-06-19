@@ -21,28 +21,25 @@
 --                                                                          --
 ------------------------------------------------------------------------------
 
---  ESP32-S3 implementation: send characters to the built-in USB-serial-JTAG
---  controller (the console used by the ROM/2nd-stage bootloader and the
---  CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG devkit console -- i.e. the /dev/ttyACM
---  port).  The peripheral is already clocked and enabled by the bootloader, so
---  System.Text_IO.Put can write to it directly with no driver setup.
+--  ESP32-S3 implementation: route console characters through the ROM's
+--  esp_rom_printf, which drives the built-in USB-serial-JTAG port (the
+--  /dev/ttyACM console) the bootloader has already brought up.  Poking the EP1
+--  FIFO registers directly proved unreliable once the ROM console driver had
+--  been used (the first thing the boot glue does), so System.Text_IO reuses
+--  the same ROM path -- the one console output known to work on this board.
+--  This makes Ada.Text_IO work on the bare boot.
 
-with Interfaces;             use Interfaces;
 --  System (the ancestor) is directly visible here; no `with` needed.
 
 package body System.Text_IO is
 
-   --  USB-serial-JTAG registers (ESP32-S3 TRM).
-   --    EP1      (0x6003_8000): write byte 0..7 -> serial-in (TX) FIFO.
-   --    EP1_CONF (0x6003_8004): bit0 WR_DONE   -> flush the FIFO as a packet;
-   --                            bit1 IN_EP_DATA_FREE (RO) -> FIFO has room.
-   EP1 : Unsigned_32
-     with Volatile, Address => System'To_Address (16#6003_8000#), Import;
-   EP1_Conf : Unsigned_32
-     with Volatile, Address => System'To_Address (16#6003_8004#), Import;
+   --  ROM console output: int esp_rom_printf (const char *fmt, ...).  Imported
+   --  as a procedure (the return value is ignored), and called with a constant
+   --  "%c" format so a literal '%' in the data is printed verbatim.
+   procedure Rom_Printf (Format : System.Address; Item : Integer);
+   pragma Import (C, Rom_Printf, "esp_rom_printf");
 
-   Data_Free : constant Unsigned_32 := 2;   -- EP1_CONF bit 1
-   Wr_Done   : constant Unsigned_32 := 1;   -- EP1_CONF bit 0
+   Char_Fmt : constant String := "%c" & ASCII.NUL;
 
    ---------
    -- Get --
@@ -50,7 +47,7 @@ package body System.Text_IO is
 
    function Get return Character is
    begin
-      raise Program_Error;
+      raise Program_Error;     --  input from the console is not supported
       return ASCII.NUL;
    end Get;
 
@@ -78,7 +75,7 @@ package body System.Text_IO is
 
    function Is_Tx_Ready return Boolean is
    begin
-      return (EP1_Conf and Data_Free) /= 0;
+      return True;             --  esp_rom_printf always accepts the byte
    end Is_Tx_Ready;
 
    ---------
@@ -86,16 +83,8 @@ package body System.Text_IO is
    ---------
 
    procedure Put (C : Character) is
-      Spins : Natural := 0;
    begin
-      --  Wait for FIFO room, but bounded: if no USB host is draining the port
-      --  we drop the character rather than hang the runtime forever.
-      while (EP1_Conf and Data_Free) = 0 loop
-         exit when Spins > 200_000;
-         Spins := Spins + 1;
-      end loop;
-      EP1 := Character'Pos (C);
-      EP1_Conf := Wr_Done;        --  commit the byte to the host
+      Rom_Printf (Char_Fmt'Address, Character'Pos (C));
    end Put;
 
    ----------------------------
